@@ -1,2 +1,3 @@
-settrade-v2
 requests
+firebase-admin
+settrade-v2
