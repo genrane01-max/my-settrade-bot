@@ -3,6 +3,12 @@
 # - แต่ละหุ้นมีค่าเอง (บิดหาย%, trailing%) เก็บใน Firebase /watchlist/<SYMBOL>
 # - ดึงจำนวนหุ้นจากพอร์ตอัตโนมัติ → เจอเหตุการณ์ขายหมดพอร์ต
 # - ทดสอบ Sandbox ก่อน (SETTRADE_APP_CODE=SANDBOX) แล้วค่อยใช้ ALGO
+#
+# แก้ไข: เพิ่มระบบ "หา method อัตโนมัติ" (_resolve_method) เพราะ SDK settrade_v2
+# ใช้ชื่อ method ไม่ตรงกับที่เอกสาร/ตัวอย่างเก่าบอกไว้เป๊ะๆ (เช่น subscribe_bids_offers
+# vs subscribe_bid_offer, get_portfolio อาจไม่มีตรงๆ) ตัวช่วยนี้จะลองชื่อที่เป็นไปได้
+# หลายแบบ ถ้าไม่เจอเลยจะ log รายชื่อ method จริงที่มีอยู่ใน object นั้นออกมาที่ Render
+# logs ให้เห็นเลย จะได้แก้ให้ตรงเป๊ะได้ในทีเดียว
 # ==============================================================================
 
 import os
@@ -40,6 +46,37 @@ state = {
 subscribed = set()  # หุ้นที่สตรีมอยู่แล้ว
 
 DEFAULT_CFG = {"bid_drop_pct": 60.0, "trailing_pct": 1.0, "active": True}
+
+# ===================== ตัวช่วยหา method ของ SDK แบบยืดหยุ่น =====================
+_warned_missing = set()  # กัน log ซ้ำรัวๆ ต่อ object/label เดิม
+
+def _resolve_method(obj, candidates, label=""):
+    """
+    ลองหา method จากรายชื่อที่เป็นไปได้ (candidates) ใน obj
+    ถ้าเจอ -> คืนค่า method (callable) กลับไปเลย
+    ถ้าไม่เจอเลย -> log รายชื่อ method จริงทั้งหมดที่ obj มี (ไม่ขึ้นต้นด้วย _)
+                    ออกไปที่ Render logs หนึ่งครั้ง แล้วคืนค่า None
+    """
+    for name in candidates:
+        m = getattr(obj, name, None)
+        if callable(m):
+            return m
+    key = (type(obj).__name__, label)
+    if key not in _warned_missing:
+        _warned_missing.add(key)
+        available = sorted(m for m in dir(obj) if not m.startswith("_"))
+        logger.error(
+            f"❗ [{label}] ไม่พบ method ที่ลองใน {type(obj).__name__} "
+            f"(ลองแล้ว: {candidates}) — method จริงที่มีอยู่คือ: {available}"
+        )
+    return None
+
+def _call_flexible(method, *args):
+    """เรียก method โดยลองแบบไม่มี argument ก่อน ถ้า TypeError ค่อยลองใส่ args"""
+    try:
+        return method()
+    except TypeError:
+        return method(*args)
 
 # ===================== FIREBASE =====================
 def init_firebase():
@@ -137,13 +174,49 @@ def refresh_positions(force=False):
     if equity is None:
         return
     try:
-        portfolio = equity.get_portfolio()
+        get_port = _resolve_method(
+            equity,
+            ["get_portfolio", "portfolio", "get_port", "getPortfolio", "port"],
+            "get_portfolio",
+        )
+        if get_port is None:
+            return
+
+        account_no = os.getenv("SETTRADE_ACCOUNT_N")
+        raw = _call_flexible(get_port, account_no)
+
+        # ผลลัพธ์อาจเป็น list ตรงๆ หรือ dict ที่ห่อ list ไว้อีกที — ลองทุกแบบ
+        if isinstance(raw, dict):
+            items = (
+                raw.get("portfolio_list")
+                or raw.get("portfolios")
+                or raw.get("data")
+                or raw.get("results")
+                or []
+            )
+        else:
+            items = raw or []
+
         pos = {}
-        for item in portfolio or []:
-            sym = (item.get("symbol") or "").upper()
-            vol = item.get("volume") or item.get("total_volume") or item.get("hold_volume") or 0
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            sym = (item.get("symbol") or item.get("security_symbol") or "").upper()
+            vol = (
+                item.get("volume")
+                or item.get("total_volume")
+                or item.get("hold_volume")
+                or item.get("actual_volume")
+                or item.get("start_volume")
+                or 0
+            )
             if sym:
                 pos[sym] = int(vol or 0)
+
+        if not pos and raw:
+            # ดึงข้อมูลกลับมาได้ แต่ field ไม่ตรงกับที่เดาไว้ — log ตัวอย่างไว้ดู
+            logger.warning(f"[get_portfolio] ได้ raw data กลับมาแต่แปลงเป็น position ไม่ได้: {str(raw)[:500]}")
+
         with lock:
             state["positions"] = pos
             state["pos_updated"] = now
@@ -201,7 +274,7 @@ def on_price_info(symbol, msg):
         logger.error(f"on_price_info error: {e}")
 
 def ensure_subscribe(symbols):
-    """ สมัครสตรีมหุ้นใหม่ (ถ้ายังไม่ได้สมัคร) — method ชื่ออาจต่างตามรุ่น SDK """
+    """ สมัครสตรีมหุ้นใหม่ (ถ้ายังไม่ได้สมัคร) — ลองหลายชื่อ method เพราะ SDK แต่ละเวอร์ชันตั้งชื่อไม่ตรงกัน """
     global realtime
     if investor is None or realtime is None:
         return
@@ -209,10 +282,36 @@ def ensure_subscribe(symbols):
         if sym in subscribed:
             continue
         try:
-            realtime.subscribe_bids_offers(sym, partial(on_bids_offers, sym))
-            realtime.subscribe_price_info(sym, partial(on_price_info, sym))
-            subscribed.add(sym)
-            logger.info(f"📡 สตรีม {sym} แล้ว")
+            sub_bid_offer = _resolve_method(
+                realtime,
+                [
+                    "subscribe_bid_offer",
+                    "subscribe_bids_offers",
+                    "subscribeBidOffer",
+                    "subscribe_bidoffer",
+                    "subscribe_bid_offers",
+                ],
+                "subscribe bid/offer",
+            )
+            sub_price = _resolve_method(
+                realtime,
+                [
+                    "subscribe_price_info",
+                    "subscribePriceInfo",
+                    "subscribe_price",
+                ],
+                "subscribe price info",
+            )
+            ok_any = False
+            if sub_bid_offer:
+                sub_bid_offer(sym, partial(on_bids_offers, sym))
+                ok_any = True
+            if sub_price:
+                sub_price(sym, partial(on_price_info, sym))
+                ok_any = True
+            if ok_any:
+                subscribed.add(sym)
+                logger.info(f"📡 สตรีม {sym} แล้ว")
         except Exception as e:
             logger.error(f"subscribe {sym} error: {e}")
 
@@ -223,7 +322,11 @@ def start_realtime():
         wl = load_watchlist()
         ensure_subscribe([s for s, c in wl.items() if c["active"]])
         logger.info("🔌 Realtime เริ่มทำงาน (รอ subscribe หุ้นใหม่ใน loop)")
-        realtime.run()  # บล็อกตลอด
+        run_method = _resolve_method(realtime, ["run", "start", "connect"], "realtime run")
+        if run_method:
+            run_method()  # บล็อกตลอด
+        else:
+            logger.error("❗ ไม่พบ method สำหรับเริ่ม realtime connection (run/start/connect)")
     except Exception as e:
         logger.error(f"start_realtime error: {e}")
 
