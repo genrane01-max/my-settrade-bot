@@ -23,19 +23,9 @@ logger = logging.getLogger(__name__)
 def init_firebase():
     try:
         if not firebase_admin._apps:
-            private_key = os.getenv("FIREBASE_PRIVATE_KEY", "").replace("\\n", "\n")
+            # ✅ อ่าน service account จาก Secret File ของ Render (ไฟล์ JSON ทั้งก้อน)
+            cred = credentials.Certificate("/etc/secrets/firebase.json")
             db_url = os.getenv("FIREBASE_DATABASE_URL")
-            
-            if not db_url:
-                logger.warning("FIREBASE_DATABASE_URL is missing. Firebase features may fail.")
-
-            cred_dict = {
-                "type": "service_account",
-                "project_id": os.getenv("FIREBASE_PROJECT_ID"),
-                "client_email": os.getenv("FIREBASE_CLIENT_EMAIL"),
-                "private_key": private_key,
-            }
-            cred = credentials.Certificate(cred_dict)
             firebase_admin.initialize_app(cred, {'databaseURL': db_url})
             logger.info("Firebase Realtime Database Connected!")
     except Exception as e:
@@ -77,10 +67,8 @@ def save_config(symbol, bid_drop, trailing_offset):
 # --- 2. WEB CONTROL PANEL (HTML UI) ---
 class DashboardHandler(BaseHTTPRequestHandler):
     def do_GET(self):
-        # ดึงค่า config ปัจจุบันเพื่อมาแสดงในฟอร์ม HTML
         cfg = get_config()
         
-        # สร้าง HTML โดยใช้ f-string (ต้องเบิ้ลปีกกา {{ }} สำหรับ CSS)
         html = f"""<!DOCTYPE html>
         <html lang="th">
         <head>
@@ -135,7 +123,6 @@ class DashboardHandler(BaseHTTPRequestHandler):
         
         save_config(symbol, bid_drop, trailing_offset)
         
-        # รีไดเรกต์กลับไปหน้าเดิมหลังบันทึกเสร็จ
         self.send_response(303)
         self.send_header('Location', '/')
         self.end_headers()
@@ -152,19 +139,13 @@ def start_bot():
     
     while True:
         try:
-            # ดึงค่าคอนฟิกใหม่ล่าสุดจาก Firebase 
             cfg = get_config()
             target_symbol = cfg.get("target_symbol", "TTB")
-            
-            # TODO: ใส่ Logic การเชื่อมต่อ Settrade Open API ของจริงที่นี่
-            # logger.info(f"Monitoring {target_symbol}...")
-            
-            time.sleep(5) # ลดความถี่การดึงข้อมูลเพื่อไม่ให้เปลืองโควต้า Firebase
+            time.sleep(5)
         except Exception as e:
             logger.error(f"Bot Loop Error: {e}")
             time.sleep(5)
 
 if __name__ == "__main__":
-    # รัน Web Server ใน Thread แยกเพื่อให้บอททำงานไปพร้อมกันได้
     threading.Thread(target=start_web_server, daemon=True).start()
     start_bot()
