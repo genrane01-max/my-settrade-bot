@@ -68,8 +68,16 @@ def save_config(symbol, bid_drop, trailing_offset):
 # --- 2. WEB CONTROL PANEL (HTML UI) ---
 class DashboardHandler(BaseHTTPRequestHandler):
     def do_GET(self):
-        cfg = get_config()
-        html = f"""
+        try:
+            with open("index.html", "r", encoding="utf-8") as f:
+                html = f.read()
+            self.send_response(200)
+            self.send_header("Content-type", "text/html; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(html.encode("utf-8"))
+        except Exception as e:
+            self.send_response(404)
+            self.end_headers()
         <!DOCTYPE html>
         <html lang="th">
         <head>
