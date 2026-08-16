@@ -316,17 +316,21 @@ def ensure_subscribe(symbols):
             logger.error(f"subscribe {sym} error: {e}")
 
 def start_realtime():
+    """
+    SDK เวอร์ชันนี้ (settrade_v2) ไม่มี method run()/start()/connect() แบบ blocking —
+    ยืนยันจาก log จริงว่า RealtimeDataConnection มีแค่ subscribe_bid_offer,
+    subscribe_price_info, subscribe_candlestick ฯลฯ เท่านั้น ไม่มีตัวไหนไว้ block รอ event
+    แปลว่าแต่ละ subscribe_* เปิด connection/thread เบื้องหลังให้เองตอนเรียกแล้ว
+    เราแค่ต้อง keep thread นี้ให้มีชีวิตอยู่เฉยๆ กัน object โดน garbage collect
+    """
     global realtime
     try:
         realtime = investor.RealtimeDataConnection()
         wl = load_watchlist()
         ensure_subscribe([s for s, c in wl.items() if c["active"]])
-        logger.info("🔌 Realtime เริ่มทำงาน (รอ subscribe หุ้นใหม่ใน loop)")
-        run_method = _resolve_method(realtime, ["run", "start", "connect"], "realtime run")
-        if run_method:
-            run_method()  # บล็อกตลอด
-        else:
-            logger.error("❗ ไม่พบ method สำหรับเริ่ม realtime connection (run/start/connect)")
+        logger.info("🔌 Realtime subscribe เรียบร้อย (SDK จัดการ connection เบื้องหลังเอง ไม่ต้อง run())")
+        while True:
+            time.sleep(3600)
     except Exception as e:
         logger.error(f"start_realtime error: {e}")
 
