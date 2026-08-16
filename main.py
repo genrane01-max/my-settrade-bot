@@ -185,10 +185,12 @@ def refresh_positions(force=False):
         account_no = os.getenv("SETTRADE_ACCOUNT_N")
         raw = _call_flexible(get_port, account_no)
 
-        # ผลลัพธ์อาจเป็น list ตรงๆ หรือ dict ที่ห่อ list ไว้อีกที — ลองทุกแบบ
+        # ผลลัพธ์อาจเป็น list ตรงๆ หรือ dict ที่ห่อ list ไว้อีกที
+        # ยืนยันจาก log จริงแล้วว่า settrade_v2 ใช้ camelCase: {'portfolioList': [...], 'totalPortfolio': {...}}
         if isinstance(raw, dict):
             items = (
-                raw.get("portfolio_list")
+                raw.get("portfolioList")
+                or raw.get("portfolio_list")
                 or raw.get("portfolios")
                 or raw.get("data")
                 or raw.get("results")
@@ -202,12 +204,16 @@ def refresh_positions(force=False):
             if not isinstance(item, dict):
                 continue
             sym = (item.get("symbol") or item.get("security_symbol") or "").upper()
+            if not sym or sym == "_TOTAL":
+                continue  # ข้าม row สรุปรวม (totalPortfolio ใช้ symbol '_TOTAL')
             vol = (
-                item.get("volume")
+                item.get("amount")
+                or item.get("actualVolume")
+                or item.get("currentVolume")
+                or item.get("startVolume")
+                or item.get("volume")
                 or item.get("total_volume")
                 or item.get("hold_volume")
-                or item.get("actual_volume")
-                or item.get("start_volume")
                 or 0
             )
             if sym:
