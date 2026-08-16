@@ -1,9 +1,13 @@
 # ==============================================================================
 # SETTRADE AUTO-SELL BOT WITH WEB DASHBOARD & FIREBASE
 # ==============================================================================
+# คำเตือน: โค้ดนี้เป็นเพียงโครงสร้าง (Skeleton) และแผงควบคุม (Control Panel)
+# การเทรดจริงด้วย Settrade Open API ต้องใช้ App ID, App Secret และ Pin
+# ที่ได้รับการอนุมัติจากโบรคเกอร์ที่ร่วมรายการเท่านั้น
+# ==============================================================================
+
 import os
 import time
-import requests
 import logging
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -20,6 +24,11 @@ def init_firebase():
     try:
         if not firebase_admin._apps:
             private_key = os.getenv("FIREBASE_PRIVATE_KEY", "").replace("\\n", "\n")
+            db_url = os.getenv("FIREBASE_DATABASE_URL")
+            
+            if not db_url:
+                logger.warning("FIREBASE_DATABASE_URL is missing. Firebase features may fail.")
+
             cred_dict = {
                 "type": "service_account",
                 "project_id": os.getenv("FIREBASE_PROJECT_ID"),
@@ -27,7 +36,6 @@ def init_firebase():
                 "private_key": private_key,
             }
             cred = credentials.Certificate(cred_dict)
-            db_url = os.getenv("FIREBASE_DATABASE_URL")
             firebase_admin.initialize_app(cred, {'databaseURL': db_url})
             logger.info("Firebase Realtime Database Connected!")
     except Exception as e:
@@ -60,6 +68,7 @@ def save_config(symbol, bid_drop, trailing_offset):
             "bid_drop_pct": float(bid_drop),
             "trailing_offset": float(trailing_offset)
         })
+        logger.info(f"Config saved: {symbol}, {bid_drop}%, {trailing_offset}")
         return True
     except Exception as e:
         logger.error(f"Error saving Firebase config: {e}")
@@ -68,17 +77,11 @@ def save_config(symbol, bid_drop, trailing_offset):
 # --- 2. WEB CONTROL PANEL (HTML UI) ---
 class DashboardHandler(BaseHTTPRequestHandler):
     def do_GET(self):
-        try:
-            with open("index.html", "r", encoding="utf-8") as f:
-                html = f.read()
-            self.send_response(200)
-            self.send_header("Content-type", "text/html; charset=utf-8")
-            self.end_headers()
-            self.wfile.write(html.encode("utf-8"))
-        except Exception as e:
-            self.send_response(404)
-            self.end_headers()
-        <!DOCTYPE html>
+        # ดึงค่า config ปัจจุบันเพื่อมาแสดงในฟอร์ม HTML
+        cfg = get_config()
+        
+        # สร้าง HTML โดยใช้ f-string (ต้องเบิ้ลปีกกา {{ }} สำหรับ CSS)
+        html = f"""<!DOCTYPE html>
         <html lang="th">
         <head>
             <meta charset="UTF-8">
@@ -132,6 +135,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         
         save_config(symbol, bid_drop, trailing_offset)
         
+        # รีไดเรกต์กลับไปหน้าเดิมหลังบันทึกเสร็จ
         self.send_response(303)
         self.send_header('Location', '/')
         self.end_headers()
@@ -145,26 +149,22 @@ def start_web_server():
 # --- 3. SETTRADE AUTO-SELL BOT LOOP ---
 def start_bot():
     logger.info("🤖 Auto-Sell Bot Loop Active...")
-    last_bid_price = 0.0
-    last_bid_vol = 0
-    last_time = time.time()
-    highest_price = 0.0
-
+    
     while True:
         try:
-            # ดึงค่าคอนฟิกใหม่ล่าสุดจาก Firebase ทุกๆ วินาที
+            # ดึงค่าคอนฟิกใหม่ล่าสุดจาก Firebase 
             cfg = get_config()
             target_symbol = cfg.get("target_symbol", "TTB")
-            bid_drop_threshold = float(cfg.get("bid_drop_pct", 50.0))
-            trailing_offset = float(cfg.get("trailing_offset", 0.04))
-
-            time.sleep(1)
-            # (ส่วนนี้จะดึงข้อมูล Real-time จาก Settrade API เมื่อใส่ App ID/Secret ครบ)
-
+            
+            # TODO: ใส่ Logic การเชื่อมต่อ Settrade Open API ของจริงที่นี่
+            # logger.info(f"Monitoring {target_symbol}...")
+            
+            time.sleep(5) # ลดความถี่การดึงข้อมูลเพื่อไม่ให้เปลืองโควต้า Firebase
         except Exception as e:
             logger.error(f"Bot Loop Error: {e}")
-            time.sleep(2)
+            time.sleep(5)
 
 if __name__ == "__main__":
+    # รัน Web Server ใน Thread แยกเพื่อให้บอททำงานไปพร้อมกันได้
     threading.Thread(target=start_web_server, daemon=True).start()
     start_bot()
