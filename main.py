@@ -176,7 +176,7 @@ def refresh_positions(force=False):
     try:
         get_port = _resolve_method(
             equity,
-            ["get_portfolio", "portfolio", "get_port", "getPortfolio", "port"],
+            ["get_portfolios", "get_portfolio", "portfolio", "get_port", "getPortfolio", "port"],
             "get_portfolio",
         )
         if get_port is None:
