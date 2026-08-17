@@ -1,13 +1,12 @@
 # ==============================================================================
-# SETTRADE BOT v2.9 — Watchlist หลายหุ้น + Trailing % + เทรด MP-MTL/Limit
+# SETTRADE BOT v2.11 — Watchlist หลายหุ้น + Trailing % + เทรด MP-MTL/Limit + Chase-sell
 # - แต่ละหุ้นมีค่าเอง (บิดหาย%, trailing%) เก็บใน Firebase /watchlist/<SYMBOL>
 # - ดึงจำนวนหุ้นจากพอร์ตอัตโนมัติ → เจอเหตุการณ์ขายหมดพอร์ต
 # - ทดสอบ Sandbox ก่อน (SETTRADE_APP_CODE=SANDBOX) แล้วค่อยใช้ ALGO
 # - รองรับหลายโบรกเกอร์ผ่าน SETTRADE_BROKER_ID (env var) — ไม่ผูกกับโบรกใดโบรกหนึ่ง
 #
 # แก้ไข: เพิ่มระบบ "หา method อัตโนมัติ" (_resolve_method) เพราะ SDK settrade_v2
-# ใช้ชื่อ method ไม่ตรงกับที่เอกสาร/ตัวอย่างเก่าบอกไว้เป๊ะๆ (เช่น subscribe_bids_offers
-# vs subscribe_bid_offer, get_portfolio อาจไม่มีตรงๆ) ตัวช่วยนี้จะลองชื่อที่เป็นไปได้
+# ใช้ชื่อ method ไม่ตรงกับที่เอกสาร/ตัวอย่างเก่าบอกไว้เป๊ะๆ ตัวช่วยนี้จะลองชื่อที่เป็นไปได้
 # หลายแบบ ถ้าไม่เจอเลยจะ log รายชื่อ method จริงที่มีอยู่ใน object นั้นออกมาที่ Render
 # logs ให้เห็นเลย จะได้แก้ให้ตรงเป๊ะได้ในทีเดียว
 #
@@ -15,27 +14,36 @@
 # input polling fix, watchlist auto-sync กับพอร์ต, event-driven check, order log,
 # lunch break, modal confirm แทน native confirm())
 #
-# v2.8: แก้คอขวดความเร็ว — save_trailing/send_telegram/place_order (auto-sell) เป็น
-# fire-and-forget ผ่าน thread pool แยก ไม่ block thread ที่กำลังเช็คหุ้นตัวอื่น
+# v2.8: save_trailing/send_telegram/place_order (auto-sell) เป็น fire-and-forget
+# ผ่าน thread pool แยก ไม่ block thread ที่กำลังเช็คหุ้นตัวอื่น
 #
-# v2.9 เพิ่มตัวเลือก "จำกัดราคา (Limit)" ในปุ่มเทรดด่วนของหน้าเว็บ
-#   - เดิม /api/order ยิง MP-MTL (ราคาตลาด) เสมอ ไม่มีทางระบุราคาเอง ถ้าหุ้นตัวนั้น
-#     กระดานบางมาก ซื้อ 100 หุ้นอาจไล่ราคาขึ้นหลายช่วงราคา ต้นทุนจริงสูงกว่าที่คิดไว้มาก
-#   - เพิ่ม dropdown "ประเภทคำสั่ง" (ตลาด/จำกัดราคา) — เลือก "จำกัดราคา" แล้วจะโชว์
-#     ช่องกรอกราคา บังคับกรอกก่อนยืนยันได้ (ห้ามเป็น 0/ว่าง)
-#   - place_order() เพิ่ม parameter price รับค่าจริงจากหน้าเว็บ (เดิม hardcode 0.0
-#     เสมอ ทำให้ Limit ไม่มีทางทำงานถูกได้เลยแม้จะส่ง price_type="Limit" ไปก็ตาม)
-#   - สำคัญ: ตรรกะ auto-sell (_check_symbol_and_maybe_sell → place_order_fire_and_forget)
-#     ยังคงยิง MP-MTL เท่านั้นเหมือนเดิมทุกประการ ไม่เปิดให้เลือกราคาเด็ดขาด เพราะเป็น
-#     กลไกความปลอดภัยที่ต้องการ "รับประกันว่าขายได้" ตอนเกิดเหตุฉุกเฉิน การใส่ราคาจำกัด
-#     เข้าไปจะขัดกับจุดประสงค์เดิม (อาจขายไม่ออกเพราะราคาที่ตั้งไว้ไม่มีคนรับซื้อ)
-#     Limit ใช้ได้เฉพาะเทรดด่วนที่คุณกดเองในหน้าเว็บเท่านั้น
+# v2.9: เพิ่มตัวเลือก "จำกัดราคา (Limit)" ในปุ่มเทรดด่วนของหน้าเว็บ (auto-sell ยังคง
+# ยิง MP-MTL เท่านั้นเสมอ — เป็นกลไกความปลอดภัยที่ต้องการรับประกันว่าขายได้)
 #
-# v2.10 แก้: v2.9 เคย auto-fill ช่องราคาด้วยราคาล่าสุดที่ "เลือกหุ้นดูจอ" (dropdown บนสุด)
-#   กำลังแสดงอยู่ — แต่ช่อง "หุ้น" ในเทรดด่วนกับ dropdown นั้นเป็นคนละตัวแปรกัน (ตั้งใจแยก
-#   กันไว้ตั้งแต่แรกกันพิมพ์โดน overwrite) ถ้าผู้ใช้พิมพ์ชื่อหุ้นเองในช่องเทรดด่วนโดยไม่ได้
-#   เลือกจาก dropdown ก่อน ราคาที่ auto-fill มาอาจเป็นของหุ้นคนละตัว เสี่ยงกดซื้อผิดราคาไป
-#   โดยไม่รู้ตัว → เอา auto-fill ออกทั้งหมด ช่องราคาว่างเปล่าเสมอ บังคับพิมพ์เองทุกครั้ง
+# v2.10: เอา auto-fill ราคาออกจากช่องเทรดด่วน (เคย fill ผิดหุ้นได้ถ้าไม่ได้เลือกจาก dropdown)
+#
+# v2.11 เพิ่ม "ไล่ราคาขายอัตโนมัติ" (chase-sell) สำหรับ auto-sell ทั้ง 2 เงื่อนไข (บิดหาย%/
+#   ราคาตก% และ trailing stop): เดิมยิงขาย MP-MTL ครั้งเดียวแล้วสมมติว่าขายหมดทันที (ตัด
+#   position เป็น 0 ในความจำโดยไม่รอผลจริง) ถ้าตลาดจริงมี volume รองรับไม่พอ (เช่นบิดชั้น 1
+#   มีแค่ 40 หุ้น แต่ถือ 100) ส่วนที่เหลือ (60) จะค้างเป็นคำสั่งเปิดอยู่เฉยๆ โดยบอทไม่รู้ตัว
+#   และไม่มีอะไรเฝ้าหุ้นที่เหลือจนกว่า refresh_positions() รอบถัดไป (ไม่เกิน 30 วิ) จะแก้เลข
+#   ให้ถูก — ช่วงนั้นคือช่วงที่เสี่ยงที่สุด (ไม่มีอะไรป้องกันหุ้นที่เหลืออยู่เลย)
+#
+#   ตอนนี้เปลี่ยนเป็น: ส่งขาย MP-MTL → poll สถานะคำสั่ง (matched/balance) → ถ้ายังเหลือค้าง
+#   ยกเลิกส่วนที่ค้างทันที → ส่งขายใหม่สำหรับจำนวนที่เหลือทันที (MP-MTL จะไปจับคู่บิดชั้นถัดไป
+#   ที่ดีที่สุด ณ ขณะนั้นเอง ไม่ต้องคำนวณราคาเจาะจงเอง) วนไม่เกิน CHASE_MAX_ROUNDS รอบ ตัด
+#   position ตามจำนวน "matched" จริงในแต่ละรอบเท่านั้น ไม่ใช่สมมติว่าขายหมดเหมือนเดิม
+#   ระหว่างไล่ราคา ตั้งธง symbols[SYM]["selling"]=True กันไม่ให้ tick ถัดไปมาสั่งขายซ้ำซ้อน
+#
+#   ⚠️ ส่วนนี้ยังไม่เคยทดสอบกับตลาดจริง — Sandbox ของ Settrade ไม่มีระบบจับคู่คำสั่ง/ไม่มี
+#   ออเดอร์ค้างให้ทดสอบสถานะ/ยกเลิกได้จริง ชื่อ method (get_orders/cancel_order) และชื่อ
+#   field ใน response (matchedVolume/balanceVolume ฯลฯ) เป็นการเดาจากรูปแบบทั่วไปของ
+#   Settrade Open API เท่านั้น ต้องทดสอบกับ ALGO จริงด้วยจำนวนหุ้นน้อยๆ ก่อนวางใจ แล้วดู
+#   Render log ทุกบรรทัดที่ขึ้นต้นด้วย "[chase-sell]" — ถ้า method หา order ไม่เจอ/field ไม่
+#   ตรง จะ log ตัวอย่าง raw data ออกมาให้เห็น เอาไปปรับ candidates ในฟังก์ชัน
+#   _get_order_snapshot() / _cancel_order() ต่อได้เลย ถ้า resolve method ไม่เจอเลย บอทจะ
+#   หยุดไล่ราคาเองอัตโนมัติ (ไม่เดาต่อ ไม่ส่งคำสั่งมั่ว) แล้วรอ refresh_positions() ปรับพอร์ต
+#   ให้ถูกแทน เหมือนพฤติกรรมเดิมก่อนมี chase-sell — ปลอดภัยไว้ก่อนเสมอเวลาไม่แน่ใจ
 # ==============================================================================
 
 import os
@@ -69,7 +77,7 @@ state = {
     "selected": "",            # หุ้นที่กำลังดูจอบิด/ออฟเฟอร์
     "watchlist": {},          # { SYMBOL: {bid_drop_pct, trailing_pct, price_drop_pct, active, pinned} }
     "positions": {},          # { SYMBOL: จำนวนหุ้นที่ถือ } — ดิบๆ จาก get_portfolios() ตรงๆ
-    "symbols": {},            # { SYMBOL: {bids, offers, last_price, highest, stop, prev_bid1_vol, drop, last_action} }
+    "symbols": {},            # { SYMBOL: {bids, offers, last_price, highest, stop, prev_bid1_vol, drop, last_action, selling} }
     "pos_updated": 0,
     "order_log": [],          # ประวัติคำสั่งซื้อ/ขาย 20 รายการล่าสุด
 }
@@ -90,6 +98,11 @@ MARKET_LUNCH_END_HHMM = (14, 30)
 BOT_LOOP_INTERVAL = 2          # วิ — งานพื้นหลัง (sync watchlist/positions) ไม่ต้องไวเท่าเช็คขาย
 ORDER_LOG_MAX = 20             # เก็บประวัติคำสั่งซื้อ/ขายไว้กี่รายการล่าสุด
 TICK_LOG_ENABLED = os.getenv("TICK_LOG_ENABLED", "0") == "1"
+
+# ---- ค่าตั้งไล่ราคาขาย (chase-sell) — v2.11 ----
+CHASE_MAX_ROUNDS = 5                 # ไล่ราคาขายไม่เกินกี่รอบ (cancel+re-place) กัน loop ไม่จบ
+CHASE_POLL_INTERVAL = 0.3            # วิ — เว้นระยะ poll สถานะคำสั่งระหว่างรอผล
+CHASE_POLL_TIMEOUT_PER_ROUND = 3.0   # วิ — รอผลคำสั่งต่อรอบนานสุดก่อนตัดสินใจยกเลิกส่วนที่เหลือ
 
 _order_executor = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="order")
 _io_executor = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="io")
@@ -354,13 +367,32 @@ def _record_order(entry):
         state["order_log"].insert(0, entry)
         state["order_log"] = state["order_log"][:ORDER_LOG_MAX]
 
+def _extract_order_no(resp):
+    """
+    ดึง order number จาก response ของ equity.place_order() — v2.11
+    ⚠️ ยังไม่ยืนยัน field name จริงจากตลาดจริง (ต้องดู Render log ตอนทดสอบ ALGO จริง
+    ว่า resp จริงๆ หน้าตาเป็นยังไง) ลองหลายชื่อ key ที่เป็นไปได้ ทั้งแบบ dict และ object
+    """
+    candidates = ("orderNo", "order_no", "orderId", "order_id", "id", "orderNumber", "no")
+    if isinstance(resp, dict):
+        for k in candidates:
+            v = resp.get(k)
+            if v:
+                return v
+    else:
+        for k in candidates:
+            v = getattr(resp, k, None)
+            if v:
+                return v
+    return None
+
 def place_order(side, symbol, volume, pin, price_type="MP-MTL", price=0.0):
     """
     side='Buy'/'Sell'
     price_type="MP-MTL" (ค่าเริ่มต้น) = ราคาตลาด, price ไม่มีผลใดๆ ส่งเป็น 0.0 เสมอ
     price_type="Limit" = จำกัดราคาเอง ต้องส่ง price เป็นราคาที่ต้องการ (บาท) มาด้วย
-    v2.9: เพิ่ม parameter price จริงๆ (เดิม hardcode 0.0 ทุกครั้งไม่ว่า price_type จะเป็นอะไร
-    ทำให้ "Limit" ไม่เคยทำงานถูกได้เลยแม้โค้ดจะรับ price_type มาเป็นพารามิเตอร์ก็ตาม)
+    v2.11: คืนค่า "order_no" เพิ่มในผลลัพธ์ด้วย (ถ้าดึงได้) ให้ _sell_chase_worker เอาไป
+    เช็คสถานะ/ยกเลิกต่อได้ — ไม่กระทบผู้เรียกเดิมที่ไม่ได้ใช้ field นี้
     """
     price_type = price_type or "MP-MTL"
     use_price = float(price) if price_type == "Limit" else 0.0
@@ -373,12 +405,13 @@ def place_order(side, symbol, volume, pin, price_type="MP-MTL", price=0.0):
         "price": use_price if price_type == "Limit" else None,
         "ok": None,
         "msg": "",
+        "order_no": None,
     }
     if equity is None:
         entry["ok"] = False
         entry["msg"] = "ยังไม่ได้เชื่อมต่อ Settrade"
         _record_order(entry)
-        return {"ok": False, "msg": entry["msg"]}
+        return {"ok": False, "msg": entry["msg"], "order_no": None}
     try:
         resp = equity.place_order(
             side=side,
@@ -390,20 +423,22 @@ def place_order(side, symbol, volume, pin, price_type="MP-MTL", price=0.0):
             validity_type="Day",
             pin=pin,
         )
+        order_no = _extract_order_no(resp)
         price_note = f" @{use_price}" if price_type == "Limit" else ""
         msg = f"📤 {side} {symbol} {volume}{price_note} ({price_type})\nตอบ: {resp}"
         logger.info(msg)
         send_telegram(msg)
         entry["ok"] = True
         entry["msg"] = str(resp)
+        entry["order_no"] = order_no
         _record_order(entry)
-        return {"ok": True, "msg": str(resp)}
+        return {"ok": True, "msg": str(resp), "order_no": order_no}
     except Exception as e:
         logger.error(f"place_order error: {e}")
         entry["ok"] = False
         entry["msg"] = str(e)
         _record_order(entry)
-        return {"ok": False, "msg": str(e)}
+        return {"ok": False, "msg": str(e), "order_no": None}
 
 def _log_late_order_result(side, symbol, volume, future):
     try:
@@ -426,24 +461,180 @@ def place_order_async(side, symbol, volume, pin, price_type="MP-MTL", price=0.0,
         future.add_done_callback(lambda f: _log_late_order_result(side, symbol, volume, f))
         return {"ok": None, "msg": f"timeout {timeout}s — รอผลจริงทีหลัง"}
 
-def place_order_fire_and_forget(side, symbol, volume, pin, price_type="MP-MTL", price=0.0, tick_ts=None):
+# ===================== ไล่ราคาขายอัตโนมัติ (chase-sell) — v2.11 =====================
+# ดูคำอธิบายเต็มที่คอมเมนต์ v2.11 บนสุดของไฟล์ — สรุปสั้นๆ: ส่งขาย MP-MTL → poll สถานะ
+# → เหลือค้างก็ยกเลิก+ส่งใหม่ทันที วนไม่เกิน CHASE_MAX_ROUNDS รอบ ทำงานเป็น background
+# thread เสมอ ไม่ block เธรดหลัก/lock ระหว่าง poll
+
+def _resolve_orders_method():
+    return _resolve_method(
+        equity,
+        ["get_orders", "get_order_list", "list_orders", "orders", "get_order"],
+        "get_orders (chase-sell)",
+    )
+
+def _get_order_snapshot(order_no):
     """
-    ใช้เฉพาะ path auto-sell ที่ยิงมาจาก websocket callback — ยิง MP-MTL เท่านั้นเสมอ
-    (ไม่มีทางเรียกด้วย price_type="Limit" จากตรรกะ auto-sell เลย เพราะเป็นกลไกความ
-    ปลอดภัยที่ต้องการรับประกันว่าขายได้ตอนเกิดเหตุฉุกเฉิน ใส่ราคาจำกัดจะขัดจุดประสงค์)
-    ไม่รอผลเลยแม้แต่เสี้ยววิ ผล/log/telegram เกิดขึ้นเบื้องหลังทั้งหมดผ่าน place_order()
+    ⚠️ ยังไม่เคยทดสอบกับตลาดจริง (sandbox ไม่มีระบบจับคู่คำสั่งจริงให้ลอง)
+    ลอง resolve method หา list คำสั่งทั้งหมดของบัญชี แล้วกรองหา order_no ที่ตรง คืน dict
+    {"matched": จำนวนที่จับคู่แล้วสะสมของออเดอร์นี้, "balance": จำนวนที่เหลือค้าง,
+    "status": สถานะดิบ, "raw": item} หรือ None ถ้าหาไม่เจอ/error — ให้ผู้เรียกตัดสินใจ
+    หยุดไล่ราคาเอง (ไม่เดาต่อ) ถ้า field name ไม่ตรงตอนทดสอบจริง ให้ดู Render log บรรทัด
+    "[chase-sell] หา order_no=... ไม่เจอ" ที่ log ตัวอย่าง raw item ออกมาให้ แล้วมาปรับ
+    candidates ในฟังก์ชันนี้ให้ตรง
     """
-    def _run():
-        t0 = time.time()
-        result = place_order(side, symbol, volume, pin, price_type, price)
+    get_orders = _resolve_orders_method()
+    if get_orders is None or equity is None:
+        return None
+    try:
+        raw = _call_flexible(get_orders, os.getenv("SETTRADE_ACCOUNT_N"))
+    except Exception as e:
+        logger.error(f"[chase-sell] get_orders error: {e}")
+        return None
+
+    if isinstance(raw, dict):
+        items = None
+        for key in ("orders", "orderList", "order_list", "data", "results"):
+            if key in raw:
+                items = raw.get(key)
+                break
+        if items is None:
+            items = [raw]  # เผื่อ SDK คืนออเดอร์เดียวตรงๆ ไม่ห่อ list
+    else:
+        items = raw or []
+
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        item_no = None
+        for k in ("orderNo", "order_no", "orderId", "order_id", "id", "orderNumber", "no"):
+            if item.get(k):
+                item_no = item.get(k)
+                break
+        if item_no is None or str(item_no) != str(order_no):
+            continue
+        matched = 0
+        for k in ("matchedVolume", "matched_volume", "filledVolume", "filled_volume", "cumExecQty", "matchQty"):
+            if item.get(k) is not None:
+                matched = int(item.get(k) or 0)
+                break
+        balance = None
+        for k in ("balanceVolume", "balance_volume", "remainingVolume", "remaining_volume", "leavesQty", "leaveVolume"):
+            if item.get(k) is not None:
+                balance = int(item.get(k) or 0)
+                break
+        if balance is None:
+            total_vol = item.get("volume") or item.get("totalVolume") or item.get("qty") or 0
+            balance = max(0, int(total_vol or 0) - matched)
+        status = item.get("status") or item.get("orderStatus") or ""
+        logger.info(f"[chase-sell] #{order_no} snapshot: matched={matched} balance={balance} status={status}")
+        return {"matched": matched, "balance": balance, "status": status, "raw": item}
+
+    logger.warning(
+        f"[chase-sell] หา order_no={order_no} ไม่เจอใน get_orders ผลลัพธ์ — อาจ field ชื่อไม่ตรง "
+        f"raw ตัวอย่างแรก: {str(items[0])[:300] if items else '(ว่าง)'}"
+    )
+    return None
+
+def _poll_order_until_settled(order_no, timeout, interval):
+    """ poll จนกว่า balance เหลือ 0 (ขายหมด) หรือหมดเวลา timeout ก็คืนค่าล่าสุดที่มี """
+    elapsed = 0.0
+    last = None
+    while elapsed < timeout:
+        snap = _get_order_snapshot(order_no)
+        if snap is None:
+            return None
+        last = snap
+        if snap["balance"] <= 0:
+            return snap
+        time.sleep(interval)
+        elapsed += interval
+    return last
+
+def _cancel_order(order_no, symbol):
+    """ ⚠️ ยังไม่เคยทดสอบกับตลาดจริง — ดูคำอธิบายเดียวกับ _get_order_snapshot() """
+    cancel_fn = _resolve_method(
+        equity,
+        ["cancel_order", "cancelOrder", "place_cancellation", "cancel"],
+        "cancel_order (chase-sell)",
+    )
+    if cancel_fn is None or equity is None:
+        return False
+    try:
+        resp = _call_flexible(cancel_fn, order_no)
+        logger.info(f"🚫 [chase-sell] ยกเลิกคำสั่ง {symbol} #{order_no} → {resp}")
+        return True
+    except Exception as e:
+        logger.error(f"[chase-sell] cancel_order #{order_no} error: {e}")
+        return False
+
+def _sell_chase_worker(symbol, initial_held, pin, tick_ts):
+    """
+    v2.11 — background thread เดียวสำหรับหุ้น 1 ตัวต่อ 1 เหตุการณ์ trigger (บิดหาย%/
+    ราคาตก% หรือ trailing stop เหมือนกันหมด ใช้ path เดียวกันนี้ทั้งคู่):
+    ส่งขาย MP-MTL → poll สถานะ → เหลือค้างก็ยกเลิก+ส่งใหม่ทันทีสำหรับจำนวนที่เหลือ
+    (MP-MTL รอบใหม่จะไปจับคู่บิดชั้นถัดไปที่ดีที่สุด ณ ขณะนั้นเอง) วนไม่เกิน
+    CHASE_MAX_ROUNDS รอบ ตัด position ตามจำนวน "matched" จริงเท่านั้นทุกรอบ
+    ถ้า resolve method ไม่เจอ/เช็คสถานะไม่ได้ระหว่างทาง → หยุดไล่ราคาทันที ไม่เดาต่อ
+    ปล่อยให้ refresh_positions() รอบถัดไป (ภายใน 30 วิ) ปรับพอร์ตให้ตรงแทน
+    """
+    remaining = initial_held
+    round_num = 0
+    while remaining > 0 and round_num < CHASE_MAX_ROUNDS:
+        round_num += 1
+        result = place_order("Sell", symbol, remaining, pin, "MP-MTL", 0.0)
+        order_no = result.get("order_no")
+        if not result.get("ok") or not order_no:
+            msg = (f"⚠️ [chase-sell] {symbol} รอบ {round_num}/{CHASE_MAX_ROUNDS}: ส่งคำสั่งไม่สำเร็จ "
+                   f"หรือไม่ได้ order_no กลับมา — หยุดไล่ราคาอัตโนมัติ ตรวจพอร์ต/คำสั่งด้วยตัวเองด่วน "
+                   f"({str(result.get('msg', ''))[:150]})")
+            logger.error(msg)
+            send_telegram_async(msg)
+            break
+
+        snap = _poll_order_until_settled(order_no, CHASE_POLL_TIMEOUT_PER_ROUND, CHASE_POLL_INTERVAL)
+        if snap is None:
+            msg = (f"⚠️ [chase-sell] {symbol} รอบ {round_num}/{CHASE_MAX_ROUNDS}: เช็คสถานะคำสั่ง #{order_no} "
+                   f"ไม่ได้ (SDK method หา order ไม่เจอ/ชื่อไม่ตรง ดู Render log) — หยุดไล่ราคาอัตโนมัติ "
+                   f"รอ refresh_positions ปรับพอร์ตให้ถูกภายใน 30 วิ หรือตรวจสอบ/ขายส่วนที่เหลือเอง")
+            logger.error(msg)
+            send_telegram_async(msg)
+            break
+
+        matched = snap["matched"]
+        balance = snap["balance"]
+        with lock:
+            cur = int(state["positions"].get(symbol, 0) or 0)
+            state["positions"][symbol] = max(0, cur - matched)
+        remaining = balance
+
+        if remaining > 0:
+            cancelled = _cancel_order(order_no, symbol)
+            if not cancelled:
+                msg = (f"⚠️ [chase-sell] {symbol} รอบ {round_num}/{CHASE_MAX_ROUNDS}: ยกเลิกคำสั่งค้าง "
+                       f"{remaining} หุ้น (#{order_no}) ไม่สำเร็จ — หยุดไล่ราคา อาจมีคำสั่งซ้อนค้างอยู่ "
+                       f"ตรวจสอบด้วยตัวเองด่วน")
+                logger.error(msg)
+                send_telegram_async(msg)
+                break
+            # วนกลับไปยิงขายรอบใหม่ทันทีสำหรับ `remaining` ที่เหลือ (ไม่หน่วงเวลาเพิ่ม)
+
+    if remaining > 0:
+        msg = (f"🛑 [chase-sell] {symbol} ไล่ราคาครบ {round_num} รอบแล้วยังเหลือ {remaining} หุ้น "
+               f"ขายไม่หมด — ตลาดอาจผันผวนหนัก/สภาพคล่องต่ำมาก กรุณาตรวจสอบและจัดการเองด่วน")
+        logger.warning(msg)
+        send_telegram_async(msg)
+    else:
         t1 = time.time()
-        if tick_ts is not None:
-            logger.info(
-                f"⏱️ {symbol} {side} เวลารวม tick→ได้ผลคำสั่งจริงจาก Settrade: "
-                f"{(t1 - tick_ts) * 1000:.0f}ms (ในนั้นรอ Settrade API ตอบ {(t1 - t0) * 1000:.0f}ms) "
-                f"→ {str(result.get('msg', ''))[:100]}"
-            )
-    _order_executor.submit(_run)
+        logger.info(
+            f"✅ [chase-sell] {symbol} ขายหมดสำเร็จหลังไล่ราคา {round_num} รอบ "
+            f"(รวมเวลา tick→ขายหมด: {(t1 - tick_ts) * 1000:.0f}ms)"
+        )
+
+    with lock:
+        s = state["symbols"].get(symbol)
+        if s:
+            s["selling"] = False
 
 def _global_guards_ok():
     with lock:
@@ -488,6 +679,8 @@ def _check_symbol_and_maybe_sell(symbol, tick_ts=None):
         s = state["symbols"].get(symbol)
         if not s:
             return
+        if s.get("selling"):
+            return  # กำลังไล่ราคาขาย (chase-sell) อยู่จาก trigger ก่อนหน้า กันสั่งขายซ้ำซ้อน
         threshold = float(cfg.get("bid_drop_pct", 60.0))
         trailing_pct = float(cfg.get("trailing_pct", 1.0))
         held = int(state["positions"].get(symbol, 0) or 0)
@@ -520,12 +713,12 @@ def _check_symbol_and_maybe_sell(symbol, tick_ts=None):
                 if price_triggered:
                     reasons.append(f"ราคาตก {drop_price_pct:.2f}%")
                 msg = (f"🚨 {symbol} บิด {bid1_price} ({' + '.join(reasons)}) "
-                       f"→ ขาย {held} หุ้น (หมดพอร์ต) ทันที!")
+                       f"→ ขาย {held} หุ้น (ไล่ราคาจนหมด) ทันที!")
                 logger.warning(msg)
                 s["last_action"] = msg
                 s["prev_bid1_vol"] = 0
                 s["prev_bid1_price"] = 0
-                state["positions"][symbol] = 0
+                s["selling"] = True  # v2.11: ให้ chase worker ตัด position เองตาม matched จริง
                 sell_action = (msg, held)
             else:
                 s["prev_bid1_vol"] = bid1_vol
@@ -542,12 +735,12 @@ def _check_symbol_and_maybe_sell(symbol, tick_ts=None):
                 stop = s.get("stop", 0.0)
                 if stop > 0 and last <= stop:
                     msg = (f"🛑 {symbol} ราคา {last} ตกถึงจุดขาย {stop} "
-                           f"(สูงสุด {s['highest']} -{trailing_pct}%) → ขาย {held} หุ้น")
+                           f"(สูงสุด {s['highest']} -{trailing_pct}%) → ขาย {held} หุ้น (ไล่ราคาจนหมด)")
                     logger.warning(msg)
                     s["last_action"] = msg
                     s["stop"] = 0
                     trailing_to_persist = (symbol, s["highest"], 0)
-                    state["positions"][symbol] = 0
+                    s["selling"] = True  # v2.11: เหมือนกัน — ให้ chase worker ตัด position เอง
                     sell_action = (msg, held)
 
     if trailing_to_persist:
@@ -555,13 +748,11 @@ def _check_symbol_and_maybe_sell(symbol, tick_ts=None):
 
     if sell_action:
         msg, held = sell_action
-        # auto-sell ยิง MP-MTL เท่านั้นเสมอ (price_type ค่าเริ่มต้น, ไม่ส่ง price) — ดูคอมเมนต์
-        # ที่ place_order_fire_and_forget ด้านบนว่าทำไมถึงตั้งใจไม่เปิดให้เลือกราคาตรงนี้
-        place_order_fire_and_forget("Sell", symbol, held, pin, tick_ts=tick_ts)
+        _order_executor.submit(_sell_chase_worker, symbol, held, pin, tick_ts)
         t_decide = time.time()
         logger.info(
-            f"⏱️ {symbol} tick→ตัดสินใจขาย+ส่งเข้าคิว: {(t_decide - tick_ts) * 1000:.1f}ms "
-            f"(รอผลจริงจาก Settrade ดู log บรรทัดถัดไปจาก place_order_fire_and_forget)"
+            f"⏱️ {symbol} tick→ตัดสินใจขาย+เริ่มไล่ราคา (chase-sell): {(t_decide - tick_ts) * 1000:.1f}ms "
+            f"(ผลแต่ละรอบดู log ที่ขึ้นต้นด้วย '[chase-sell]')"
         )
         send_telegram_async(msg)
 
@@ -661,15 +852,11 @@ def start_realtime():
 
 # ===================== รีเซ็ตข้ามวันเทรด =====================
 def new_trading_day_reset():
-    """
-    v2.9: แก้ regression — เวอร์ชันก่อนหน้าลืมล้าง prev_bid1_price (ล้างแต่ prev_bid1_vol)
-    ทำให้เสี่ยงเจอบั๊กเดียวกับตอนบิดหายข้ามคืน แต่ผ่านทางราคาแทนวอลุ่ม (เคยแก้ไปรอบก่อน
-    แล้วแต่หายไปจากเวอร์ชันนี้ น่าจะตกหล่นตอนรวมโค้ดหลายรอบ) แก้กลับให้ล้างทั้งคู่
-    """
     with lock:
         for sym, s in state["symbols"].items():
             s["prev_bid1_vol"] = 0
             s["prev_bid1_price"] = 0
+            s["selling"] = False  # v2.11: กันธง selling ค้างข้ามวันถ้า Render restart กลางไล่ราคา
         subscribed.clear()
     logger.info("📅 เข้าสู่วันเทรดใหม่ → รีเซ็ต baseline บิดหาย%/ราคาตก% และบังคับ subscribe ใหม่")
 
@@ -732,6 +919,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                         "bids": sd.get("bids", []),
                         "offers": sd.get("offers", []),
                         "last_action": sd.get("last_action", "รอข้อมูล..."),
+                        "selling": sd.get("selling", False),
                     },
                     "watchlist": state["watchlist"],
                     "positions": state["positions"],
@@ -779,8 +967,6 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "msg": "ต้องกรอก PIN"})
                 return
 
-            # v2.9: ถ้าเลือก Limit ต้องมีราคาที่ใช้ได้จริงมาด้วยเสมอ กันเผลอส่งราคา 0/ว่าง
-            # ไปที่ Settrade (บาง gateway อาจตีความ 0 เป็นอย่างอื่นไม่คาดคิด)
             if price_type == "Limit":
                 try:
                     price = float(price_raw)
@@ -809,7 +995,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     "time": now.strftime("%H:%M:%S"), "side": side,
                     "symbol": symbol.upper().strip(), "volume": volume,
                     "price_type": price_type, "price": price if price_type == "Limit" else None,
-                    "ok": False, "msg": msg,
+                    "ok": False, "msg": msg, "order_no": None,
                 }
                 _record_order(entry)
                 self.send_json({"ok": False, "msg": msg})
@@ -887,6 +1073,7 @@ HTML = """<!DOCTYPE html>
   .grow { flex:1; }
   .badge { padding:6px 12px; border-radius:20px; font-weight:bold; font-size:14px; }
   .on { background:#064e3b; color:#34d399; } .off { background:#7f1d1d; color:#fca5a5; }
+  .warn { background:#78350f; color:#fbbf24; }
   .price { font-size:34px; font-weight:800; }
   .red { color:#f87171; } .green { color:#4ade80; } .yellow { color:#facc15; }
   button { border:none; border-radius:10px; padding:12px; font-size:16px; font-weight:bold; color:#fff; cursor:pointer; }
@@ -915,6 +1102,7 @@ HTML = """<!DOCTYPE html>
       <div class="grow">
         <span id="statusBadge" class="badge on">🟢 บอททำงาน</span>
         <span id="connBadge" class="badge off">🔌 ยังไม่ต่อ</span>
+        <span id="sellingBadge" class="badge warn" style="display:none;">🏃 กำลังไล่ราคาขาย...</span>
       </div>
       <button id="toggleBtn" class="btn-toggle" style="width:110px;" onclick="toggleBot()">⏸ ปิดบอท</button>
     </div>
@@ -973,6 +1161,7 @@ HTML = """<!DOCTYPE html>
   <!-- โซน 3.5: ประวัติคำสั่งซื้อขาย -->
   <div class="card">
     <div style="font-weight:bold;margin-bottom:8px;">🧾 ประวัติคำสั่ง (ล่าสุด 20 รายการ)</div>
+    <div style="font-size:11px;color:#64748b;margin-bottom:6px;">ตอนไล่ราคาขายอัตโนมัติ (chase-sell) แต่ละรอบจะขึ้นเป็นคนละแถวในนี้</div>
     <div id="orderLogBody" style="font-size:12px;color:#64748b;">ยังไม่มีคำสั่ง</div>
   </div>
 
@@ -985,7 +1174,7 @@ HTML = """<!DOCTYPE html>
   <!-- โซน 4: Watchlist -->
   <div class="card">
     <div style="font-weight:bold;margin-bottom:8px;">📋 รายการเฝ้า (Watchlist)</div>
-    <div style="font-size:11px;color:#64748b;margin-bottom:4px;">บิดหาย% หรือ ราคาตก% (แล้วแต่อันไหนถึงก่อน) → ขายหมดพอร์ตทันที ด้วย MP-MTL เสมอ (ไม่ใช้ราคาจำกัด กันขายไม่ออก)</div>
+    <div style="font-size:11px;color:#64748b;margin-bottom:4px;">บิดหาย% หรือ ราคาตก% (แล้วแต่อันไหนถึงก่อน) → ไล่ราคาขายหมดพอร์ตด้วย MP-MTL (cancel+ส่งใหม่อัตโนมัติถ้าขายไม่หมดในรอบเดียว)</div>
     <div style="font-size:11px;color:#64748b;margin-bottom:6px;">🔒 = หุ้นที่ถืออยู่จริง ระบบเพิ่มให้อัตโนมัติ ลบแล้วจะเพิ่มกลับถ้ายังถือของอยู่ (ขายหมดจะหายเอง) — ถ้าอยากหยุดเฝ้าโดยไม่ลบ ใช้ปุ่ม 🟢/⚪ แทน ส่วนหุ้นที่กด + เพิ่มเอง ลบได้อิสระ ไว้ทดสอบ</div>
     <div id="wlBody"></div>
     <div style="border-top:1px solid #263449;margin:10px 0;"></div>
@@ -1032,11 +1221,6 @@ document.addEventListener('focusout', e=>{
 });
 
 function togglePriceField(){
-  // v2.10: ไม่ auto-fill ราคาให้อีกต่อไป — เดิมเคยดึงราคาล่าสุดที่จอ "เลือกหุ้นดูจอ" แสดงอยู่
-  // มาใส่ให้เอง แต่ช่องนั้นกับช่อง "หุ้น" ในเทรดด่วนเป็นคนละตัวแปรกัน (ตั้งใจแยกกันไว้กัน
-  // การพิมพ์โดน overwrite) ถ้าผู้ใช้พิมพ์ชื่อหุ้นในช่องเทรดด่วนเองโดยไม่ได้เลือกจาก dropdown
-  // ก่อน ราคาที่ auto-fill มาอาจเป็นราคาของหุ้นคนละตัวโดยไม่รู้ตัว เสี่ยงกดซื้อผิดราคาไปเลย
-  // ตอนนี้ช่องราคาว่างเปล่าเสมอ บังคับให้พิมพ์เองทุกครั้ง เป็นตัวเลขที่ผู้ใช้ตัดสินใจเองจริงๆ
   const isLimit = document.getElementById('tradePriceType').value === 'Limit';
   document.getElementById('tradePriceWrap').style.display = isLimit ? '' : 'none';
 }
@@ -1063,6 +1247,7 @@ async function refresh(){
     document.getElementById('stopTxt').textContent=d.stop?fmt(d.stop):'--';
     document.getElementById('dropTxt').textContent=(d.drop||0)+'%';
     document.getElementById('actionLog').textContent=d.last_action||'รอข้อมูล...';
+    document.getElementById('sellingBadge').style.display = d.selling ? '' : 'none';
     const tbody=document.getElementById('bookBody');
     let html='';
     const bids=d.bids||[], offers=d.offers||[];
@@ -1213,9 +1398,6 @@ def main():
         threading.Thread(target=start_realtime, daemon=True).start()
     threading.Thread(target=bot_loop, daemon=True).start()
     port = int(os.getenv("PORT", 10000))
-    # v2.9: กลับมาใช้ ThreadingHTTPServer (เจอว่าเวอร์ชันที่อัปโหลดมาใช้ HTTPServer ธรรมดา
-    # ซึ่งจัดการทีละ 1 request — ถ้าสั่งซื้อ/ขายมือแล้ว Settrade ตอบช้า จะบล็อกทุก
-    # request อื่นด้วย รวมถึง /api/state ที่หน้าเว็บ poll ทุกวินาที ทำให้แดชบอร์ดค้างทั้งหน้า)
     server = ThreadingHTTPServer(("0.0.0.0", port), DashboardHandler)
     logger.info(f"🌐 Dashboard: http://0.0.0.0:{port}")
     server.serve_forever()
