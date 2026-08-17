@@ -105,8 +105,19 @@ STALE_POSITION_SECONDS = 180   # ถ้าดึงพอร์ตไม่ส�
 SELL_ORDER_TIMEOUT = 2         # วินาที — รอคำตอบคำสั่งขายไม่เกินนี้ ไม่บล็อก loop หลัก (ไม่ยิงซ้ำอัตโนมัติ)
 MARKET_OPEN_HHMM = (9, 55)     # เผื่อช่วง pre-open/ATO ก่อนตลาดเปิดจริง 10:00
 MARKET_CLOSE_HHMM = (16, 40)   # เผื่อช่วง ATC/หลังปิด
+# v2.5: ตลาดหุ้นไทย (SET) พักเที่ยง 12:30-14:30 น. ทุกวัน — ช่วงนี้ไม่รับ Market order
+# เดิม is_market_hours() เช็คแค่ 9:55-16:40 เป็นช่วงเดียวยาวๆ ไม่ได้หักพักเที่ยงออก
+# ทำให้บอทคิดว่าตลาดเปิดทั้งที่ Settrade gateway ปฏิเสธคำสั่งจริง (SEOSGW-01 "market is not open")
+MARKET_LUNCH_START_HHMM = (12, 30)
+MARKET_LUNCH_END_HHMM = (14, 30)
 BOT_LOOP_INTERVAL = 2          # วิ — งานพื้นหลัง (sync watchlist/positions) ไม่ต้องไวเท่าเช็คขาย
 ORDER_LOG_MAX = 20             # เก็บประวัติคำสั่งซื้อ/ขายไว้กี่รายการล่าสุด
+# v2.6: log ทุก tick ที่เข้ามา (on_bids_offers/on_price_info) มีประโยชน์ตอนดีบักว่า
+# subscribe ติดจริงไหม แต่รันอยู่ในเธรดเดียวกับที่ตัดสินใจขาย (ก่อนเรียกเช็คขายด้วยซ้ำ)
+# ถ้าตลาด tick ถี่มากช่วงผันผวน การเขียน log ทุกครั้งอาจหน่วงเพิ่มเล็กน้อยได้ — ปิดไว้เป็น
+# ค่าเริ่มต้น (False) เพื่อไม่ให้กระทบความไวของการขาย เปิดชั่วคราวตอนอยากดีบักเท่านั้น
+# โดยตั้ง env var TICK_LOG_ENABLED=1 บน Render
+TICK_LOG_ENABLED = os.getenv("TICK_LOG_ENABLED", "0") == "1"
 
 _order_executor = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="order")
 
@@ -149,13 +160,21 @@ def get_bkk_date():
     return get_bkk_now().date()
 
 def is_market_hours():
-    """ เช็คคร่าวๆ ว่าอยู่ในช่วงเวลาตลาดหุ้นไทยเปิดไหม (จ-ศ, เผื่อ buffer pre-open/หลังปิด) """
+    """
+    เช็คคร่าวๆ ว่าอยู่ในช่วงเวลาตลาดหุ้นไทยเปิดไหม (จ-ศ, เผื่อ buffer pre-open/หลังปิด)
+    v2.5: หักช่วงพักเที่ยง 12:30-14:30 น. ออกด้วย (ตลาดปิดจริงช่วงนี้ทุกวัน) — เดิมไม่ได้หัก
+    ทำให้บอทคิดว่าเปิดอยู่ทั้งที่ Settrade ปฏิเสธคำสั่งจริงเพราะเป็นช่วงพักเที่ยง
+    """
     now = get_bkk_now()
     if now.weekday() >= 5:  # 5=เสาร์, 6=อาทิตย์
         return False
     hm = now.hour * 60 + now.minute
     start = MARKET_OPEN_HHMM[0] * 60 + MARKET_OPEN_HHMM[1]
     end = MARKET_CLOSE_HHMM[0] * 60 + MARKET_CLOSE_HHMM[1]
+    lunch_start = MARKET_LUNCH_START_HHMM[0] * 60 + MARKET_LUNCH_START_HHMM[1]
+    lunch_end = MARKET_LUNCH_END_HHMM[0] * 60 + MARKET_LUNCH_END_HHMM[1]
+    if lunch_start <= hm < lunch_end:
+        return False
     return start <= hm <= end
 
 # ===================== FIREBASE =====================
@@ -626,11 +645,13 @@ def on_bids_offers(symbol, msg):
     """
     websocket callback — อัปเดต state แล้วเช็คขายทันที (event-driven, ไม่รอ bot_loop)
     v2.4: log ทุก tick ที่เข้ามาจริง (แยกจาก log ตอน subscribe สำเร็จ) เพื่อเช็คง่ายๆ
-    ว่า subscribe ติดแล้วมีข้อมูลไหลเข้าจริงไหม (เช่น Sandbox บางโบรกไม่ส่ง order book
-    ให้จริง ถ้าไม่เห็น log นี้เลยหลัง subscribe สำเร็จ ให้สงสัยจุดนี้ก่อน)
+    ว่า subscribe ติดแล้วมีข้อมูลไหลเข้าจริงไหม
+    v2.6: ปิด log นี้เป็นค่าเริ่มต้น (TICK_LOG_ENABLED=0) กันหน่วงเวลาตัดสินใจขายเวลา
+    ตลาด tick ถี่ๆ — เปิดชั่วคราวตอนดีบักผ่าน env var เท่านั้น ไม่ใช่ทางหลักที่ใช้ตอนเทรดจริง
     """
     try:
-        logger.info(f"📥 tick bid/offer เข้า {symbol}: {msg}")
+        if TICK_LOG_ENABLED:
+            logger.info(f"📥 tick bid/offer เข้า {symbol}: {msg}")
         with lock:
             s = state["symbols"].setdefault(symbol, {})
             s["bids"] = normalize_book(msg.get("bids"))
@@ -643,9 +664,11 @@ def on_price_info(symbol, msg):
     """
     websocket callback — อัปเดต state แล้วเช็คขายทันที (event-driven, ไม่รอ bot_loop)
     v2.4: log ทุก tick ที่เข้ามาจริง เหตุผลเดียวกับ on_bids_offers ด้านบน
+    v2.6: ปิด log นี้เป็นค่าเริ่มต้นเช่นกัน (ดูคอมเมนต์ใน on_bids_offers)
     """
     try:
-        logger.info(f"📥 tick price เข้า {symbol}: {msg}")
+        if TICK_LOG_ENABLED:
+            logger.info(f"📥 tick price เข้า {symbol}: {msg}")
         with lock:
             s = state["symbols"].setdefault(symbol, {})
             s["last_price"] = msg.get("last", 0.0) or msg.get("price", 0.0)
@@ -844,6 +867,28 @@ class DashboardHandler(BaseHTTPRequestHandler):
             pin = data.get("pin", "")
             if not pin:
                 self.send_json({"ok": False, "msg": "ต้องกรอก PIN"})
+                return
+            # v2.5: เช็คก่อนยิงจริง — ถ้าเป็นช่วงพักเที่ยง/นอกเวลาตลาด แจ้งข้อความที่เข้าใจง่าย
+            # แทนที่จะรอ error ดิบจาก Settrade gateway (SEOSGW-01) อย่างเดียว
+            if not is_market_hours():
+                now = get_bkk_now()
+                hm = now.hour * 60 + now.minute
+                lunch_start = MARKET_LUNCH_START_HHMM[0] * 60 + MARKET_LUNCH_START_HHMM[1]
+                lunch_end = MARKET_LUNCH_END_HHMM[0] * 60 + MARKET_LUNCH_END_HHMM[1]
+                if now.weekday() >= 5:
+                    reason = "วันหยุดสุดสัปดาห์"
+                elif lunch_start <= hm < lunch_end:
+                    reason = "ช่วงพักเที่ยง (12:30-14:30 น.)"
+                else:
+                    reason = "นอกเวลาทำการตลาด"
+                msg = f"ตลาดปิดอยู่ตอนนี้ ({reason}) — ส่งคำสั่งไม่ได้"
+                entry = {
+                    "time": now.strftime("%H:%M:%S"), "side": side,
+                    "symbol": symbol.upper().strip(), "volume": volume,
+                    "ok": False, "msg": msg,
+                }
+                _record_order(entry)
+                self.send_json({"ok": False, "msg": msg})
                 return
             self.send_json(place_order(side, symbol, volume, pin))  # MP-MTL
             return
