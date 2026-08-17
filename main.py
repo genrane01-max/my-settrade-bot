@@ -1,8 +1,9 @@
 # ==============================================================================
-# SETTRADE BOT v2.2 — Watchlist หลายหุ้น + Trailing % + เทรด MP-MTL
+# SETTRADE BOT v2.4 — Watchlist หลายหุ้น + Trailing % + เทรด MP-MTL
 # - แต่ละหุ้นมีค่าเอง (บิดหาย%, trailing%) เก็บใน Firebase /watchlist/<SYMBOL>
 # - ดึงจำนวนหุ้นจากพอร์ตอัตโนมัติ → เจอเหตุการณ์ขายหมดพอร์ต
 # - ทดสอบ Sandbox ก่อน (SETTRADE_APP_CODE=SANDBOX) แล้วค่อยใช้ ALGO
+# - รองรับหลายโบรกเกอร์ผ่าน SETTRADE_BROKER_ID (env var) — ไม่ผูกกับโบรกใดโบรกหนึ่ง
 #
 # แก้ไข: เพิ่มระบบ "หา method อัตโนมัติ" (_resolve_method) เพราะ SDK settrade_v2
 # ใช้ชื่อ method ไม่ตรงกับที่เอกสาร/ตัวอย่างเก่าบอกไว้เป๊ะๆ (เช่น subscribe_bids_offers
@@ -40,6 +41,21 @@
 # v2.3 แก้: เปลี่ยนตรรกะเช็คขายจาก polling (รอ loop รอบถัดไป ~1 วิ) เป็น event-driven
 #    (ยิงเช็คทันทีตอน websocket ส่ง tick ใหม่เข้ามา) — ดูรายละเอียดที่คอมเมนต์
 #    เหนือ _check_symbol_and_maybe_sell() ด้านล่าง
+#
+# v2.4 แก้:
+# 1) เพิ่ม log ทุกครั้งที่มี tick (bid/offer, price) เข้ามาจริงจาก websocket
+#    (on_bids_offers/on_price_info) เพราะเดิม log แค่ตอน "subscribe สำเร็จ" ซึ่งไม่ได้
+#    แปลว่าจะมีข้อมูลจริงวิ่งเข้ามา (เช่น Sandbox บางโบรกไม่ส่ง order book จริงให้)
+#    เปิด log ใหม่นี้จะเช็คได้ชัดว่า subscribe ติดจริงหรือแค่ค้างรอเฉยๆ
+# 2) refresh_positions(): เดิม log เป็น WARNING ทุกครั้งที่ portfolioList ว่างเปล่า
+#    ทั้งที่ "พอร์ตว่างจริง" (ไม่มีหุ้นถืออยู่เลย) กับ "แปลง field ไม่ได้จริง" เป็นคนละเคส
+#    → แยกสองเคสนี้ออกจากกัน ไม่ log warning ตอนพอร์ตว่างจริง กัน log หลอกให้ตกใจ
+# 3) เพิ่ม order_log: เก็บประวัติคำสั่งซื้อ/ขาย 20 รายการล่าสุดไว้ใน state (มีเวลา/
+#    ผล/ข้อความตอบกลับ) ส่งออกทาง /api/state และแสดงเป็นรายการในหน้าเว็บ กันปัญหา
+#    เดิมที่รู้ผลคำสั่งได้แค่ผ่าน alert() ที่หายไปทันทีที่ปิด popup
+# 4) เพิ่มการ์ด "พอร์ตปัจจุบัน" ในหน้าเว็บ แสดง state["positions"] ดิบๆ ตรงๆ จาก
+#    get_portfolios() โดยไม่ผ่านตรรกะกรอง/sync ของ watchlist เลย ไว้เช็คว่าพอร์ตจริง
+#    มีอะไรบ้าง แยกจากตาราง watchlist ที่ถูกกรองแล้ว
 # ==============================================================================
 
 import os
@@ -72,9 +88,10 @@ state = {
     "connected": False,
     "selected": "",            # หุ้นที่กำลังดูจอบิด/ออฟเฟอร์
     "watchlist": {},          # { SYMBOL: {bid_drop_pct, trailing_pct, price_drop_pct, active, pinned} }
-    "positions": {},          # { SYMBOL: จำนวนหุ้นที่ถือ }
+    "positions": {},          # { SYMBOL: จำนวนหุ้นที่ถือ } — ดิบๆ จาก get_portfolios() ตรงๆ
     "symbols": {},            # { SYMBOL: {bids, offers, last_price, highest, stop, prev_bid1_vol, drop, last_action} }
     "pos_updated": 0,
+    "order_log": [],          # ประวัติคำสั่งซื้อ/ขาย 20 รายการล่าสุด
 }
 subscribed = set()  # หุ้นที่สตรีมอยู่แล้ว
 _last_trading_date = None  # วันเทรดล่าสุดที่เคยรีเซ็ต baseline ไปแล้ว (เวลาไทย)
@@ -89,6 +106,7 @@ SELL_ORDER_TIMEOUT = 2         # วินาที — รอคำตอบค
 MARKET_OPEN_HHMM = (9, 55)     # เผื่อช่วง pre-open/ATO ก่อนตลาดเปิดจริง 10:00
 MARKET_CLOSE_HHMM = (16, 40)   # เผื่อช่วง ATC/หลังปิด
 BOT_LOOP_INTERVAL = 2          # วิ — งานพื้นหลัง (sync watchlist/positions) ไม่ต้องไวเท่าเช็คขาย
+ORDER_LOG_MAX = 20             # เก็บประวัติคำสั่งซื้อ/ขายไว้กี่รายการล่าสุด
 
 _order_executor = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="order")
 
@@ -233,6 +251,15 @@ def send_telegram(message):
 
 # ===================== SETTRADE =====================
 def init_settrade():
+    """
+    เชื่อมต่อ Settrade ผ่าน settrade_v2.Investor — รองรับหลายโบรกเกอร์ผ่าน
+    SETTRADE_BROKER_ID (env var) ไม่ผูกกับโบรกใดโบรกหนึ่งในโค้ด เปลี่ยนโบรกเกอร์
+    (เช่น จาก BLS ไปเป็น INVX) แค่เปลี่ยนค่า env vars บน Render:
+      SETTRADE_APP_ID / SETTRADE_APP_SECRET (key ชุดใหม่จากโบรกใหม่)
+      SETTRADE_BROKER_ID (รหัสโบรกใหม่)
+      SETTRADE_ACCOUNT_N (เลขบัญชีที่โบรกใหม่)
+    ไม่ต้องแก้โค้ดส่วนนี้เลย
+    """
     global investor, equity
     app_id = os.getenv("SETTRADE_APP_ID")
     app_secret = os.getenv("SETTRADE_APP_SECRET")
@@ -240,7 +267,7 @@ def init_settrade():
     app_code = os.getenv("SETTRADE_APP_CODE", "SANDBOX")
     account_no = os.getenv("SETTRADE_ACCOUNT_N")
     if not app_id or not app_secret:
-        logger.warning("ยังไม่มี SETTRADE_APP_ID/SECRET — ต้องรอ key จาก BLS ถึงจะเชื่อมตลาด")
+        logger.warning("ยังไม่มี SETTRADE_APP_ID/SECRET — ต้องรอ key จากโบรกเกอร์ถึงจะเชื่อมตลาด")
         return False
     try:
         investor = Investor(app_id=app_id, app_secret=app_secret,
@@ -275,15 +302,13 @@ def refresh_positions(force=False):
 
         # ผลลัพธ์อาจเป็น list ตรงๆ หรือ dict ที่ห่อ list ไว้อีกที
         # ยืนยันจาก log จริงแล้วว่า settrade_v2 ใช้ camelCase: {'portfolioList': [...], 'totalPortfolio': {...}}
+        portfolio_list_key_used = None
         if isinstance(raw, dict):
-            items = (
-                raw.get("portfolioList")
-                or raw.get("portfolio_list")
-                or raw.get("portfolios")
-                or raw.get("data")
-                or raw.get("results")
-                or []
-            )
+            for key in ("portfolioList", "portfolio_list", "portfolios", "data", "results"):
+                if key in raw:
+                    portfolio_list_key_used = key
+                    break
+            items = raw.get(portfolio_list_key_used, []) if portfolio_list_key_used else []
         else:
             items = raw or []
 
@@ -307,9 +332,14 @@ def refresh_positions(force=False):
             if sym:
                 pos[sym] = int(vol or 0)
 
+        # แยกเคส "พอร์ตว่างจริง" (portfolioList เป็น [] จริงๆ) ออกจากเคส
+        # "ได้ raw data มาแต่แปลง field ไม่ได้" — เคสแรกไม่ใช่ปัญหา ไม่ต้อง warn
         if not pos and raw:
-            # ดึงข้อมูลกลับมาได้ แต่ field ไม่ตรงกับที่เดาไว้ — log ตัวอย่างไว้ดู
-            logger.warning(f"[get_portfolio] ได้ raw data กลับมาแต่แปลงเป็น position ไม่ได้: {str(raw)[:500]}")
+            list_is_genuinely_empty = (
+                isinstance(raw, dict) and portfolio_list_key_used is not None and items == []
+            )
+            if not list_is_genuinely_empty:
+                logger.warning(f"[get_portfolio] ได้ raw data กลับมาแต่แปลงเป็น position ไม่ได้: {str(raw)[:500]}")
 
         with lock:
             state["positions"] = pos
@@ -327,7 +357,8 @@ def sync_watchlist_with_portfolio():
     - หุ้นที่เพิ่มเองผ่านหน้าเว็บ (pinned=True) จะไม่ถูกลบอัตโนมัติ ไว้ทดสอบระบบ/
       เฝ้าดูก่อนซื้อได้ ต้องกดลบเองเท่านั้น
     หมายเหตุ: กดลบหุ้นที่ยังถืออยู่จริง (pinned=False) → รอบถัดไปจะถูกเพิ่มกลับอัตโนมัติ
-    เพราะยังมีของอยู่ในพอร์ตจริง เป็นกันชนความปลอดภัย ไม่ใช่บั๊ก
+    เพราะยังมีของอยู่ในพอร์ตจริง เป็นกันชนความปลอดภัย ไม่ใช่บั๊ก (ถ้าอยากหยุดเฝ้าโดยไม่ลบ
+    ให้ใช้ปุ่ม บน/ปิด (active=False) แทน)
     """
     with lock:
         positions = dict(state["positions"])
@@ -367,10 +398,27 @@ def sync_watchlist_with_portfolio():
 
     ensure_subscribe([s for s, c in watchlist.items() if c.get("active", True)])
 
+def _record_order(entry):
+    """ บันทึกผลคำสั่งซื้อ/ขายลง state["order_log"] (ล่าสุดอยู่บนสุด, เก็บแค่ ORDER_LOG_MAX รายการ) """
+    with lock:
+        state["order_log"].insert(0, entry)
+        state["order_log"] = state["order_log"][:ORDER_LOG_MAX]
+
 def place_order(side, symbol, volume, pin, price_type="MP-MTL"):
     """ side='Buy'/'Sell' — MP-MTL เสมอ (กันราคาหลุดไกล) """
+    entry = {
+        "time": get_bkk_now().strftime("%H:%M:%S"),
+        "side": side,
+        "symbol": symbol.upper().strip(),
+        "volume": volume,
+        "ok": None,
+        "msg": "",
+    }
     if equity is None:
-        return {"ok": False, "msg": "ยังไม่ได้เชื่อมต่อ Settrade"}
+        entry["ok"] = False
+        entry["msg"] = "ยังไม่ได้เชื่อมต่อ Settrade"
+        _record_order(entry)
+        return {"ok": False, "msg": entry["msg"]}
     try:
         resp = equity.place_order(
             side=side,
@@ -385,9 +433,15 @@ def place_order(side, symbol, volume, pin, price_type="MP-MTL"):
         msg = f"📤 {side} {symbol} {volume} ({price_type})\nตอบ: {resp}"
         logger.info(msg)
         send_telegram(msg)
+        entry["ok"] = True
+        entry["msg"] = str(resp)
+        _record_order(entry)
         return {"ok": True, "msg": str(resp)}
     except Exception as e:
         logger.error(f"place_order error: {e}")
+        entry["ok"] = False
+        entry["msg"] = str(e)
+        _record_order(entry)
         return {"ok": False, "msg": str(e)}
 
 def _log_late_order_result(side, symbol, volume, future):
@@ -402,10 +456,11 @@ def _log_late_order_result(side, symbol, volume, future):
 def place_order_async(side, symbol, volume, pin, price_type="MP-MTL", timeout=SELL_ORDER_TIMEOUT):
     """
     ส่งคำสั่งในเธรดแยก แล้วรอผลไม่เกิน `timeout` วิ เพื่อไม่ให้ loop หลักค้าง
-    - ถ้าตอบทันภายในเวลา: คืนผลจริงตามปกติ
+    - ถ้าตอบทันภายในเวลา: คืนผลจริงตามปกติ (place_order บันทึก order_log ให้แล้ว)
     - ถ้าไม่ตอบทัน: เลิกรอ (ไม่ยกเลิกคำสั่งจริง — Settrade อาจดำเนินการสำเร็จอยู่เบื้องหลัง)
       แล้วปล่อยให้ loop หลักไปเช็คหุ้นตัวอื่นต่อ ไม่ยิงคำสั่งซ้ำเด็ดขาด
       ผลจริงที่มาทีหลังจะถูก log + แจ้ง Telegram ผ่าน _log_late_order_result
+      (บันทึกลง order_log แล้วเช่นกัน เพราะเรียก place_order ข้างในอยู่ดี)
     """
     future = _order_executor.submit(place_order, side, symbol, volume, pin, price_type)
     try:
@@ -568,8 +623,14 @@ def normalize_book(data):
     return rows
 
 def on_bids_offers(symbol, msg):
-    """ websocket callback — อัปเดต state แล้วเช็คขายทันที (event-driven, ไม่รอ bot_loop) """
+    """
+    websocket callback — อัปเดต state แล้วเช็คขายทันที (event-driven, ไม่รอ bot_loop)
+    v2.4: log ทุก tick ที่เข้ามาจริง (แยกจาก log ตอน subscribe สำเร็จ) เพื่อเช็คง่ายๆ
+    ว่า subscribe ติดแล้วมีข้อมูลไหลเข้าจริงไหม (เช่น Sandbox บางโบรกไม่ส่ง order book
+    ให้จริง ถ้าไม่เห็น log นี้เลยหลัง subscribe สำเร็จ ให้สงสัยจุดนี้ก่อน)
+    """
     try:
+        logger.info(f"📥 tick bid/offer เข้า {symbol}: {msg}")
         with lock:
             s = state["symbols"].setdefault(symbol, {})
             s["bids"] = normalize_book(msg.get("bids"))
@@ -579,8 +640,12 @@ def on_bids_offers(symbol, msg):
         logger.error(f"on_bids_offers error: {e}")
 
 def on_price_info(symbol, msg):
-    """ websocket callback — อัปเดต state แล้วเช็คขายทันที (event-driven, ไม่รอ bot_loop) """
+    """
+    websocket callback — อัปเดต state แล้วเช็คขายทันที (event-driven, ไม่รอ bot_loop)
+    v2.4: log ทุก tick ที่เข้ามาจริง เหตุผลเดียวกับ on_bids_offers ด้านบน
+    """
     try:
+        logger.info(f"📥 tick price เข้า {symbol}: {msg}")
         with lock:
             s = state["symbols"].setdefault(symbol, {})
             s["last_price"] = msg.get("last", 0.0) or msg.get("price", 0.0)
@@ -738,7 +803,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
                         "last_action": sd.get("last_action", "รอข้อมูล..."),
                     },
                     "watchlist": state["watchlist"],
-                    "positions": state["positions"],
+                    "positions": state["positions"],  # ดิบๆ จาก get_portfolios() ตรงๆ
+                    "order_log": state["order_log"],
                 }
             self.send_json(payload)
             return
@@ -865,6 +931,9 @@ HTML = """<!DOCTYPE html>
   .wl-row button { padding:6px 8px; font-size:12px; width:auto; }
   .modal-bg { display:none; position:fixed; inset:0; background:rgba(0,0,0,.7); z-index:50; align-items:center; justify-content:center; }
   .modal { background:#1e293b; border:1px solid #475569; border-radius:14px; padding:20px; max-width:340px; width:92%; }
+  .order-row { display:flex; justify-content:space-between; gap:8px; font-size:12px; padding:6px 0; border-top:1px solid #1e293b; }
+  .order-row:first-child { border-top:none; }
+  .ok-yes { color:#4ade80; } .ok-no { color:#f87171; } .ok-pending { color:#facc15; }
 </style>
 </head>
 <body>
@@ -916,11 +985,23 @@ HTML = """<!DOCTYPE html>
     </div>
   </div>
 
+  <!-- โซน 3.5: ประวัติคำสั่งซื้อขาย -->
+  <div class="card">
+    <div style="font-weight:bold;margin-bottom:8px;">🧾 ประวัติคำสั่ง (ล่าสุด 20 รายการ)</div>
+    <div id="orderLogBody" style="font-size:12px;color:#64748b;">ยังไม่มีคำสั่ง</div>
+  </div>
+
+  <!-- โซน 3.6: พอร์ตปัจจุบัน (ดิบๆ ไม่ผ่านการกรอง) -->
+  <div class="card">
+    <div style="font-weight:bold;margin-bottom:8px;">💼 พอร์ตปัจจุบัน (จาก Settrade ตรงๆ)</div>
+    <div id="portBody" style="font-size:13px;color:#94a3b8;">กำลังโหลด...</div>
+  </div>
+
   <!-- โซน 4: Watchlist -->
   <div class="card">
     <div style="font-weight:bold;margin-bottom:8px;">📋 รายการเฝ้า (Watchlist)</div>
     <div style="font-size:11px;color:#64748b;margin-bottom:4px;">บิดหาย% หรือ ราคาตก% (แล้วแต่อันไหนถึงก่อน) → ขายหมดพอร์ตทันที</div>
-    <div style="font-size:11px;color:#64748b;margin-bottom:6px;">🔒 = หุ้นที่ถืออยู่จริง ระบบเพิ่มให้อัตโนมัติ ลบแล้วจะเพิ่มกลับถ้ายังถือของอยู่ (ขายหมดจะหายเอง) ส่วนหุ้นที่กด + เพิ่มเอง ลบได้อิสระ ไว้ทดสอบ</div>
+    <div style="font-size:11px;color:#64748b;margin-bottom:6px;">🔒 = หุ้นที่ถืออยู่จริง ระบบเพิ่มให้อัตโนมัติ ลบแล้วจะเพิ่มกลับถ้ายังถือของอยู่ (ขายหมดจะหายเอง) — ถ้าอยากหยุดเฝ้าโดยไม่ลบ ใช้ปุ่ม 🟢/⚪ แทน ส่วนหุ้นที่กด + เพิ่มเอง ลบได้อิสระ ไว้ทดสอบ</div>
     <div id="wlBody"></div>
     <div style="border-top:1px solid #263449;margin:10px 0;"></div>
     <div style="font-size:12px;color:#94a3b8;margin-bottom:6px;">➕ เพิ่มหุ้นใหม่ (ไว้ทดสอบ/เฝ้าก่อนซื้อ)</div>
@@ -1004,6 +1085,27 @@ async function refresh(){
     }
     tbody.innerHTML=html||'<tr><td colspan="5" style="color:#64748b;">รอข้อมูล...</td></tr>';
 
+    // ประวัติคำสั่งซื้อขาย
+    const olb=document.getElementById('orderLogBody');
+    const orders=s.order_log||[];
+    if(orders.length===0){
+      olb.innerHTML='ยังไม่มีคำสั่ง';
+    }else{
+      olb.innerHTML=orders.map(o=>{
+        const cls=o.ok===true?'ok-yes':(o.ok===false?'ok-no':'ok-pending');
+        const icon=o.ok===true?'✅':(o.ok===false?'❌':'⏳');
+        const sideTh=o.side==='Buy'?'ซื้อ':'ขาย';
+        return `<div class="order-row"><span>${o.time} ${icon} ${sideTh} ${o.symbol} ${o.volume}</span><span class="${cls}" style="text-align:right;max-width:55%;overflow-wrap:anywhere;">${(o.msg||'').slice(0,80)}</span></div>`;
+      }).join('');
+    }
+
+    // พอร์ตปัจจุบัน (ดิบๆ จาก positions ตรงๆ ไม่ผ่านการกรองของ watchlist)
+    const pb=document.getElementById('portBody');
+    const pk=Object.keys(s.positions||{});
+    pb.innerHTML = pk.length
+      ? pk.map(k=>`<div>${k}: <span class="yellow mono">${s.positions[k]}</span> หุ้น</div>`).join('')
+      : '<div>ไม่มีหุ้นในพอร์ต</div>';
+
     // watchlist rows — ข้ามการ rebuild ทั้งบล็อกนี้ถ้ากำลังโฟกัส/พิมพ์ช่องไหนอยู่ในตารางนี้
     if(!wlFocusedId){
       const wl=document.getElementById('wlBody');
@@ -1056,6 +1158,7 @@ async function doOrder(){
   const res=await r.json();
   alert(res.ok?'✅ ส่งแล้ว: '+res.msg:'❌ '+res.msg);
   closeModal();
+  refresh(); // อัปเดตประวัติคำสั่งทันทีไม่ต้องรอ interval
 }
 async function addSymbol(){
   const symbol=document.getElementById('newSym').value.trim().toUpperCase();
