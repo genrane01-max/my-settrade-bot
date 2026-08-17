@@ -36,6 +36,10 @@
 #    ไม่ได้แก้ตาราง watchlist) → แก้ให้ข้ามการ rebuild ตารางนี้ระหว่างที่ยังโฟกัส/
 #    พิมพ์ช่องอยู่ (ใช้ focusin/focusout แบบ event delegation กันไว้ทั้งตาราง เพราะแถว
 #    ในตารางนี้เพิ่ม/หายเองได้จากการ sync พอร์ตอัตโนมัติ)
+#
+# v2.3 แก้: เปลี่ยนตรรกะเช็คขายจาก polling (รอ loop รอบถัดไป ~1 วิ) เป็น event-driven
+#    (ยิงเช็คทันทีตอน websocket ส่ง tick ใหม่เข้ามา) — ดูรายละเอียดที่คอมเมนต์
+#    เหนือ _check_symbol_and_maybe_sell() ด้านล่าง
 # ==============================================================================
 
 import os
@@ -84,6 +88,7 @@ STALE_POSITION_SECONDS = 180   # ถ้าดึงพอร์ตไม่ส�
 SELL_ORDER_TIMEOUT = 2         # วินาที — รอคำตอบคำสั่งขายไม่เกินนี้ ไม่บล็อก loop หลัก (ไม่ยิงซ้ำอัตโนมัติ)
 MARKET_OPEN_HHMM = (9, 55)     # เผื่อช่วง pre-open/ATO ก่อนตลาดเปิดจริง 10:00
 MARKET_CLOSE_HHMM = (16, 40)   # เผื่อช่วง ATC/หลังปิด
+BOT_LOOP_INTERVAL = 2          # วิ — งานพื้นหลัง (sync watchlist/positions) ไม่ต้องไวเท่าเช็คขาย
 
 _order_executor = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="order")
 
@@ -314,7 +319,7 @@ def refresh_positions(force=False):
 
 def sync_watchlist_with_portfolio():
     """
-    ซิงก์ watchlist กับพอร์ตจริงอัตโนมัติ ทุกรอบ bot_loop (~1 วิ):
+    ซิงก์ watchlist กับพอร์ตจริงอัตโนมัติ ทุกรอบ bot_loop (~BOT_LOOP_INTERVAL วิ):
     - ถือหุ้นอยู่ (held > 0) แต่ยังไม่อยู่ใน watchlist → เพิ่มให้อัตโนมัติ (pinned=False)
       กันเคสถือของอยู่จริงแต่บอทไม่รู้จัก เลยไม่มีการป้องกันเทรลลิ่ง/บิดหายให้
     - หุ้นที่ไม่ได้กด "เพิ่มหุ้นใหม่" เอง (pinned=False) แล้วขายหมดพอร์ตแล้ว (held<=0)
@@ -413,6 +418,145 @@ def place_order_async(side, symbol, volume, pin, price_type="MP-MTL", timeout=SE
         future.add_done_callback(lambda f: _log_late_order_result(side, symbol, volume, f))
         return {"ok": None, "msg": f"timeout {timeout}s — รอผลจริงทีหลัง"}
 
+# ===================== ตรรกะเฝ้าหุ้น (event-driven) =====================
+#
+# v2.3: เดิมตรรกะขายทั้งหมดอยู่ใน check_and_autosell() ที่ bot_loop() เรียกทุก 1 วิ
+# (polling) — ปัญหาคือ websocket (on_bids_offers/on_price_info) ได้ tick ใหม่เข้ามา
+# เร็วกว่านั้น แต่บอทต้องรอ "รอบถัดไป" ของ loop ก่อนถึงจะไปอ่านมันจริง เสียเวลาฟรี
+# สูงสุดเกือบ 1 วิทุกครั้ง
+#
+# ตอนนี้แยกเป็น 2 ชั้น:
+# 1) _global_guards_ok() — เช็คเงื่อนไขที่ใช้ร่วมกันทุกหุ้น (เปิดบอท/connected/
+#    เวลาตลาด/พอร์ต stale) เบาๆ ไม่ต้อง lock นาน
+# 2) _check_symbol_and_maybe_sell(symbol) — ตรรกะขายของหุ้นตัวเดียว (บิดหาย%/
+#    ราคาตก%/trailing) ย้ายมาจาก check_and_autosell() เดิมทั้งหมด แต่ปรับให้รับ
+#    symbol เดียว เรียกได้ทั้งจาก:
+#      - on_bids_offers()/on_price_info() ทันทีที่ websocket ส่ง tick ใหม่มา (เร็วสุด)
+#      - bot_loop() เป็น fallback เผื่อหุ้นไหนไม่มี tick เข้ามาเลยช่วงหนึ่ง (เช็คทุก
+#        BOT_LOOP_INTERVAL วิ กันพลาดเฉยๆ ไม่ใช่ทางหลักแล้ว)
+#
+# critical section (ช่วงที่ถือ lock) ตั้งใจทำให้สั้นที่สุด: อ่าน/เขียน state เร็วๆ
+# แล้วปล่อย lock ก่อนค่อยเรียก place_order_async / send_telegram (I/O ช้า) เพื่อไม่ให้
+# thread ของ websocket ที่วิ่งถี่ๆ ต้องรอ lock นาน
+
+def _global_guards_ok():
+    """ เช็คเงื่อนไขร่วมแบบเบาๆ ก่อนเสียเวลาเช็คหุ้นตัวไหนเลย """
+    with lock:
+        if not state["enabled"] or not state["connected"]:
+            return False
+    if not is_market_hours():
+        return False
+
+    now_ts = time.time()
+    with lock:
+        stale = state["pos_updated"] == 0 or (now_ts - state["pos_updated"] > STALE_POSITION_SECONDS)
+        was_alerted = state.get("_stale_alerted", False)
+    if stale:
+        if not was_alerted:
+            msg = f"⚠️ ดึงข้อมูลพอร์ตไม่สำเร็จเกิน {STALE_POSITION_SECONDS // 60} นาที — หยุดเทรดอัตโนมัติชั่วคราวเพื่อความปลอดภัย"
+            logger.warning(msg)
+            send_telegram(msg)
+            with lock:
+                state["_stale_alerted"] = True
+        return False
+    elif was_alerted:
+        send_telegram("✅ ดึงข้อมูลพอร์ตกลับมาปกติแล้ว เทรดต่อได้")
+        with lock:
+            state["_stale_alerted"] = False
+    return True
+
+def _check_symbol_and_maybe_sell(symbol):
+    """ เช็คเงื่อนไขขายของหุ้นตัวเดียว — ยิงเรียกทันทีจาก websocket callback (ดูคอมเมนต์ด้านบน) """
+    if not _global_guards_ok():
+        return
+
+    pin = os.getenv("SETTRADE_PIN")
+    sell_action = None  # เตรียม args ไว้ยิงหลังปล่อย lock: (reason_msg, held)
+
+    with lock:
+        cfg = state["watchlist"].get(symbol)
+        if not cfg or not cfg.get("active", True):
+            return
+        s = state["symbols"].get(symbol)
+        if not s:
+            return
+        threshold = float(cfg.get("bid_drop_pct", 60.0))
+        trailing_pct = float(cfg.get("trailing_pct", 1.0))
+        held = int(state["positions"].get(symbol, 0) or 0)
+        if held <= 0:
+            return  # ไม่ถือหุ้น → ไม่ขาย
+
+        # --- 1) บิดชั้น 1 หายไป / ราคาบิดตกเกิน % → ขายหมดพอร์ตทันที
+        bids = s.get("bids") or []
+        if bids:
+            bid1_price, bid1_vol = bids[0]
+            prev_vol = s.get("prev_bid1_vol", 0.0)
+            prev_price = s.get("prev_bid1_price", 0.0)
+            price_threshold = float(cfg.get("price_drop_pct", 1.0))
+
+            drop_vol_pct = 0.0
+            if prev_vol > 0 and bid1_vol < prev_vol:
+                drop_vol_pct = (prev_vol - bid1_vol) / prev_vol * 100
+
+            drop_price_pct = 0.0
+            if prev_price > 0 and bid1_price < prev_price:
+                drop_price_pct = (prev_price - bid1_price) / prev_price * 100
+
+            s["drop"] = round(max(drop_vol_pct, drop_price_pct), 2)
+
+            vol_triggered = drop_vol_pct >= threshold
+            price_triggered = drop_price_pct >= price_threshold
+            if vol_triggered or price_triggered:
+                reasons = []
+                if vol_triggered:
+                    reasons.append(f"วอลุ่มหาย {drop_vol_pct:.1f}%")
+                if price_triggered:
+                    reasons.append(f"ราคาตก {drop_price_pct:.2f}%")
+                msg = (f"🚨 {symbol} บิด {bid1_price} ({' + '.join(reasons)}) "
+                       f"→ ขาย {held} หุ้น (หมดพอร์ต) ทันที!")
+                logger.warning(msg)
+                s["last_action"] = msg
+                s["prev_bid1_vol"] = 0    # ป้องกันขายซ้ำ
+                s["prev_bid1_price"] = 0
+                state["positions"][symbol] = 0  # ตัดจำนวนหุ้นในความจำเป็น 0 ทันที กันขายซ้ำ
+                sell_action = (msg, held)
+            else:
+                s["prev_bid1_vol"] = bid1_vol
+                s["prev_bid1_price"] = bid1_price
+
+        # --- 2) Trailing % (เช็คต่อแม้ข้อ 1 ไม่เข้าเงื่อนไข ยกเว้นข้อ 1 ขายไปแล้ว) ---
+        if sell_action is None:
+            last = s.get("last_price", 0.0)
+            if last > 0:
+                highest = s.get("highest", 0.0)
+                if last > highest:
+                    s["highest"] = last
+                    s["stop"] = round(last * (1 - trailing_pct / 100.0), 2)
+                    save_trailing(symbol, s["highest"], s["stop"])  # persist กัน restart แล้วหาย
+                stop = s.get("stop", 0.0)
+                if stop > 0 and last <= stop:
+                    msg = (f"🛑 {symbol} ราคา {last} ตกถึงจุดขาย {stop} "
+                           f"(สูงสุด {s['highest']} -{trailing_pct}%) → ขาย {held} หุ้น")
+                    logger.warning(msg)
+                    s["last_action"] = msg
+                    s["stop"] = 0  # ป้องกันขายซ้ำ
+                    save_trailing(symbol, s["highest"], 0)
+                    state["positions"][symbol] = 0
+                    sell_action = (msg, held)
+
+    # ปล่อย lock แล้วค่อยยิงคำสั่งขาย/แจ้งเตือน (I/O ช้า ไม่ควรถือ lock ระหว่างนี้)
+    if sell_action:
+        msg, held = sell_action
+        place_order_async("Sell", symbol, held, pin)  # MP-MTL, timeout ไม่บล็อก
+        send_telegram(msg)
+
+def check_and_autosell_all():
+    """ fallback: ไล่เช็คทุกหุ้นใน watchlist — ใช้ใน bot_loop() เผื่อหุ้นไหนไม่มี tick เข้ามาเลย """
+    with lock:
+        symbols = list(state["watchlist"].keys())
+    for symbol in symbols:
+        _check_symbol_and_maybe_sell(symbol)
+
 # ===================== สตรีมข้อมูล =====================
 def normalize_book(data):
     rows = []
@@ -424,19 +568,23 @@ def normalize_book(data):
     return rows
 
 def on_bids_offers(symbol, msg):
+    """ websocket callback — อัปเดต state แล้วเช็คขายทันที (event-driven, ไม่รอ bot_loop) """
     try:
         with lock:
             s = state["symbols"].setdefault(symbol, {})
             s["bids"] = normalize_book(msg.get("bids"))
             s["offers"] = normalize_book(msg.get("offers"))
+        _check_symbol_and_maybe_sell(symbol)
     except Exception as e:
         logger.error(f"on_bids_offers error: {e}")
 
 def on_price_info(symbol, msg):
+    """ websocket callback — อัปเดต state แล้วเช็คขายทันที (event-driven, ไม่รอ bot_loop) """
     try:
         with lock:
             s = state["symbols"].setdefault(symbol, {})
             s["last_price"] = msg.get("last", 0.0) or msg.get("price", 0.0)
+        _check_symbol_and_maybe_sell(symbol)
     except Exception as e:
         logger.error(f"on_price_info error: {e}")
 
@@ -520,114 +668,15 @@ def new_trading_day_reset():
         subscribed.clear()
     logger.info("📅 เข้าสู่วันเทรดใหม่ → รีเซ็ต baseline บิดหาย% และบังคับ subscribe ใหม่")
 
-# ===================== ตรรกะเฝ้าหุ้น =====================
-def check_and_autosell():
-    with lock:
-        if not state["enabled"] or not state["connected"]:
-            return
-
-        # --- Guard 1: นอกเวลาตลาด ไม่ต้องเช็คเงื่อนไขขาย (กันงานเปล่า/error โดยไม่จำเป็น) ---
-        if not is_market_hours():
-            return
-
-        # --- Guard 2: ข้อมูลพอร์ตค้างเกิน STALE_POSITION_SECONDS → หยุดเทรดชั่วคราว ---
-        now_ts = time.time()
-        stale = state["pos_updated"] == 0 or (now_ts - state["pos_updated"] > STALE_POSITION_SECONDS)
-        if stale:
-            if not state.get("_stale_alerted"):
-                msg = f"⚠️ ดึงข้อมูลพอร์ตไม่สำเร็จเกิน {STALE_POSITION_SECONDS // 60} นาที — หยุดเทรดอัตโนมัติชั่วคราวเพื่อความปลอดภัย"
-                logger.warning(msg)
-                send_telegram(msg)
-                state["_stale_alerted"] = True
-            return
-        elif state.get("_stale_alerted"):
-            send_telegram("✅ ดึงข้อมูลพอร์ตกลับมาปกติแล้ว เทรดต่อได้")
-            state["_stale_alerted"] = False
-
-        pin = os.getenv("SETTRADE_PIN")
-        for symbol, cfg in state["watchlist"].items():
-            if not cfg.get("active", True):
-                continue
-            s = state["symbols"].get(symbol)
-            if not s:
-                continue
-            threshold = float(cfg.get("bid_drop_pct", 60.0))
-            trailing_pct = float(cfg.get("trailing_pct", 1.0))
-            held = int(state["positions"].get(symbol, 0) or 0)
-            if held <= 0:
-                continue  # ไม่ถือหุ้น → ไม่ขาย
-
-            # --- 1) บิดชั้น 1 หายไป → ขายหมดพอร์ตทันที
-            #    เดิมเช็คแค่ "วอลุ่มหาย %" อย่างเดียว ซึ่งพลาดเคสที่บิดชั้นนั้นโดนกวาดหมด
-            #    ในทีเดียว แล้วชั้นราคาถัดไปที่ขึ้นมาเป็นชั้นแรกใหม่ดันมีวอลุ่มมากกว่าเดิม
-            #    (เพราะเป็นคนละราคา คนละไม้) ทำให้ตัวเลขวอลุ่มดูเหมือน "เพิ่มขึ้น" ทั้งที่จริง
-            #    ราคาตกไปแล้ว → เพิ่มเงื่อนไข "ราคาบิดตกลงเกิน price_drop_pct %" ควบคู่ไปด้วย
-            #    เข้าเงื่อนไขไหนก่อนก็ขายทันที ไม่ต้องรอครบทั้งคู่
-            bids = s.get("bids") or []
-            if bids:
-                bid1_price, bid1_vol = bids[0]
-                prev_vol = s.get("prev_bid1_vol", 0.0)
-                prev_price = s.get("prev_bid1_price", 0.0)
-                price_threshold = float(cfg.get("price_drop_pct", 1.0))
-
-                drop_vol_pct = 0.0
-                if prev_vol > 0 and bid1_vol < prev_vol:
-                    drop_vol_pct = (prev_vol - bid1_vol) / prev_vol * 100
-
-                drop_price_pct = 0.0
-                if prev_price > 0 and bid1_price < prev_price:
-                    drop_price_pct = (prev_price - bid1_price) / prev_price * 100
-
-                s["drop"] = round(max(drop_vol_pct, drop_price_pct), 2)
-
-                vol_triggered = drop_vol_pct >= threshold
-                price_triggered = drop_price_pct >= price_threshold
-                if vol_triggered or price_triggered:
-                    reasons = []
-                    if vol_triggered:
-                        reasons.append(f"วอลุ่มหาย {drop_vol_pct:.1f}%")
-                    if price_triggered:
-                        reasons.append(f"ราคาตก {drop_price_pct:.2f}%")
-                    msg = (f"🚨 {symbol} บิด {bid1_price} ({' + '.join(reasons)}) "
-                           f"→ ขาย {held} หุ้น (หมดพอร์ต) ทันที!")
-                    logger.warning(msg)
-                    s["last_action"] = msg
-                    s["prev_bid1_vol"] = 0    # ป้องกันขายซ้ำ
-                    s["prev_bid1_price"] = 0
-                    # ขายหมดพอร์ตเสมอ (MP-MTL ไม่มีทยอยขาย) → ตัดจำนวนหุ้นในความจำเป็น 0 ทันที
-                    # ไม่ต้องรอ refresh_positions() รอบถัดไป (30 วิ) กันเช็ครอบหน้าเห็นว่ายังถืออยู่แล้วขายซ้ำ
-                    state["positions"][symbol] = 0
-                    # ยิงคำสั่งขายก่อน แล้วค่อยแจ้งเตือนทีหลัง — Telegram ตอบช้าได้ ไม่ควรมาหน่วง
-                    # เวลาที่ควรใช้ส่งคำสั่งเข้าตลาดให้เร็วที่สุด
-                    place_order_async("Sell", symbol, held, pin)  # MP-MTL, timeout ไม่บล็อก loop
-                    send_telegram(msg)
-                    continue
-                s["prev_bid1_vol"] = bid1_vol
-                s["prev_bid1_price"] = bid1_price
-
-            # --- 2) Trailing % — จุดขายคำนวณจากราคาสูงสุดแบบเรียลไทม์ ---
-            last = s.get("last_price", 0.0)
-            if last > 0:
-                highest = s.get("highest", 0.0)
-                if last > highest:
-                    s["highest"] = last
-                    s["stop"] = round(last * (1 - trailing_pct / 100.0), 2)
-                    save_trailing(symbol, s["highest"], s["stop"])  # persist กัน restart แล้วหาย
-                stop = s.get("stop", 0.0)
-                if stop > 0 and last <= stop:
-                    msg = (f"🛑 {symbol} ราคา {last} ตกถึงจุดขาย {stop} "
-                           f"(สูงสุด {s['highest']} -{trailing_pct}%) → ขาย {held} หุ้น")
-                    logger.warning(msg)
-                    s["last_action"] = msg
-                    s["stop"] = 0  # ป้องกันขายซ้ำ
-                    save_trailing(symbol, s["highest"], 0)
-                    # เหมือนกัน — ขายหมดพอร์ตเสมอ → ตัดจำนวนหุ้นในความจำเป็น 0 ทันที กันขายซ้ำระหว่างรอ refresh
-                    state["positions"][symbol] = 0
-                    # ยิงคำสั่งขายก่อน แล้วค่อยแจ้งเตือนทีหลัง (เหตุผลเดียวกับบล็อกด้านบน)
-                    place_order_async("Sell", symbol, held, pin)  # MP-MTL, timeout ไม่บล็อก loop
-                    send_telegram(msg)
-
 def bot_loop():
+    """
+    v2.3: ตรรกะเช็คขายหลักย้ายไปยิงตรงจาก websocket callback แล้ว (event-driven,
+    ดูคอมเมนต์เหนือ _check_symbol_and_maybe_sell) loop นี้เหลือแค่งานพื้นหลังที่ไม่ต้องไวมาก
+    (sync watchlist กับพอร์ต, refresh positions ทุก 30 วิ, reset วันใหม่) บวก
+    check_and_autosell_all() เป็น fallback เผื่อหุ้นไหนไม่มี tick เข้ามาเลยช่วงหนึ่ง
+    ลดความถี่จาก 1 วิ เป็น BOT_LOOP_INTERVAL วิ เพื่อลด lock contention กับ thread
+    ของ websocket ที่วิ่งถี่กว่ามาก
+    """
     global _last_trading_date
     while True:
         try:
@@ -651,10 +700,10 @@ def bot_loop():
             ensure_subscribe(active_syms)
             refresh_positions()
             sync_watchlist_with_portfolio()  # เพิ่ม/ลบ watchlist อัตโนมัติตามพอร์ตจริง
-            check_and_autosell()
+            check_and_autosell_all()         # fallback กันพลาด เผื่อหุ้นไหนไม่มี tick เข้ามา
         except Exception as e:
             logger.error(f"Bot Loop Error: {e}")
-        time.sleep(1)
+        time.sleep(BOT_LOOP_INTERVAL)
 
 # ===================== เว็บ DASHBOARD =====================
 class DashboardHandler(BaseHTTPRequestHandler):
