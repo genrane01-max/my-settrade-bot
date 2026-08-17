@@ -56,6 +56,16 @@
 # 4) เพิ่มการ์ด "พอร์ตปัจจุบัน" ในหน้าเว็บ แสดง state["positions"] ดิบๆ ตรงๆ จาก
 #    get_portfolios() โดยไม่ผ่านตรรกะกรอง/sync ของ watchlist เลย ไว้เช็คว่าพอร์ตจริง
 #    มีอะไรบ้าง แยกจากตาราง watchlist ที่ถูกกรองแล้ว
+#
+# v2.5 แก้: is_market_hours() หักช่วงพักเที่ยง 12:30-14:30 น. ออกด้วย (ดู
+#    MARKET_LUNCH_START_HHMM/MARKET_LUNCH_END_HHMM) + /api/order เช็คก่อนยิงจริง
+#    แจ้งเหตุผลที่เข้าใจง่ายแทน error ดิบจาก gateway
+#
+# v2.6 แก้: TICK_LOG_ENABLED (env var) คุมว่าจะ log ทุก tick ที่เข้ามาไหม ปิดเป็น
+#    ค่าเริ่มต้นกันหน่วงตอนตลาด tick ถี่ๆ
+#
+# v2.7 แก้: ใช้ modal ในหน้าเว็บแทน native confirm() ตอนลบหุ้น (บาง webview บล็อก
+#    confirm() เงียบๆ) + log ทุกครั้งที่มีการขอลบ watchlist พร้อมผลลัพธ์
 # ==============================================================================
 
 import os
@@ -475,6 +485,9 @@ def _log_late_order_result(side, symbol, volume, future):
 def place_order_async(side, symbol, volume, pin, price_type="MP-MTL", timeout=SELL_ORDER_TIMEOUT):
     """
     ส่งคำสั่งในเธรดแยก แล้วรอผลไม่เกิน `timeout` วิ เพื่อไม่ให้ loop หลักค้าง
+    ใช้เฉพาะ path ที่ต้องการผลลัพธ์ทันที (เช่น /api/order ที่ผู้ใช้กดปุ่มในหน้าเว็บแล้วรอ
+    alert ตอบกลับ) — ตรรกะ auto-sell ที่ยิงจาก websocket callback ใช้
+    place_order_fire_and_forget() แทน (ดูคอมเมนต์ตรงนั้น) เพราะไม่ควรรอแม้แต่ timeout นี้เลย
     - ถ้าตอบทันภายในเวลา: คืนผลจริงตามปกติ (place_order บันทึก order_log ให้แล้ว)
     - ถ้าไม่ตอบทัน: เลิกรอ (ไม่ยกเลิกคำสั่งจริง — Settrade อาจดำเนินการสำเร็จอยู่เบื้องหลัง)
       แล้วปล่อยให้ loop หลักไปเช็คหุ้นตัวอื่นต่อ ไม่ยิงคำสั่งซ้ำเด็ดขาด
@@ -512,6 +525,55 @@ def place_order_async(side, symbol, volume, pin, price_type="MP-MTL", timeout=SE
 # critical section (ช่วงที่ถือ lock) ตั้งใจทำให้สั้นที่สุด: อ่าน/เขียน state เร็วๆ
 # แล้วปล่อย lock ก่อนค่อยเรียก place_order_async / send_telegram (I/O ช้า) เพื่อไม่ให้
 # thread ของ websocket ที่วิ่งถี่ๆ ต้องรอ lock นาน
+#
+# v2.8 แก้ (คอขวดความเร็ว 2 จุดที่เจอจากรีวิวโค้ด):
+# 1) save_trailing() (เขียน Firebase) เคยถูกเรียกขณะ "ถือ lock อยู่" ทุกครั้งที่หุ้น
+#    ตัวไหนก็ตามทำจุดสูงสุดใหม่ (เกิดบ่อยมากตอนหุ้นวิ่ง) → หุ้นตัวอื่นทั้งหมดต้องรอคิว
+#    lock เดียวกันจนกว่า Firebase จะตอบ (~50-300ms) ก่อนถึงจะเช็คเงื่อนไขขายของตัวเองได้
+#    ตอนนี้แค่ "จด" ค่าที่ต้องเซฟไว้ในตัวแปรระหว่างถือ lock แล้วค่อยยิงเขียนจริงหลังปล่อย
+#    lock แล้ว ผ่าน _io_executor (fire-and-forget) ไม่ block thread ที่กำลังเช็คหุ้นอื่นเลย
+# 2) place_order_async() เดิมรอผลจริงจาก Settrade API สูงสุด SELL_ORDER_TIMEOUT (2s)
+#    บน thread เดียวกับที่ SDK ใช้ dispatch callback ของหุ้นทุกตัว (ถ้า SDK ใช้ thread
+#    เดียว — สถาปัตยกรรมทั่วไปของ MQTT/WebSocket client) ระหว่างรอผลขายหุ้น A หุ้น B
+#    ที่ร่วงพร้อมกันพอดีจะไม่ถูกประมวลผลเลยจนกว่า A จะเสร็จ — เพิ่ม
+#    place_order_fire_and_forget() ให้ path auto-sell ยิงคำสั่งแล้ว "ปล่อยผ่านทันที"
+#    ไม่รอผลแม้แต่เสี้ยววิ (ผล/log/telegram ของคำสั่งเกิดขึ้นเบื้องหลังทั้งหมด ผ่าน
+#    place_order() ที่บันทึก order_log ให้อยู่แล้วไม่ว่าสำเร็จหรือพลาด) ส่วน
+#    place_order_async() เดิม (รอผลมีจำกัดเวลา) ยังใช้เหมือนเดิมสำหรับปุ่มกดเทรดด่วน
+#    ในหน้าเว็บ (/api/order) ที่ผู้ใช้รออยู่หน้าจอ ต้องการ feedback ทันที
+# 3) เพิ่ม log จับเวลาจริง "tick เข้า → ตัดสินใจ+ส่งคำสั่งเข้าคิว" และ "tick เข้า →
+#    ได้ผลคำสั่งจริงจาก Settrade" (2 บรรทัดแยกกัน อันแรกเร็วมาก อันหลังรวม network
+#    round-trip จริงด้วย) แทนที่จะประมาณจากการอ่านโค้ดเฉยๆ
+
+_io_executor = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="io")
+
+def save_trailing_async(symbol, highest, stop):
+    """ เขียน Firebase แบบ fire-and-forget ไม่ block thread ที่เรียก (ดูคอมเมนต์ v2.8 ข้อ 1) """
+    _io_executor.submit(save_trailing, symbol, highest, stop)
+
+def send_telegram_async(message):
+    """ ส่ง Telegram แบบ fire-and-forget ไม่ block thread ที่เรียก """
+    _io_executor.submit(send_telegram, message)
+
+def place_order_fire_and_forget(side, symbol, volume, pin, price_type="MP-MTL", tick_ts=None):
+    """
+    ใช้เฉพาะ path auto-sell ที่ยิงมาจาก websocket callback — ไม่รอผลเลยแม้แต่เสี้ยววิ
+    (ดูคอมเมนต์ v2.8 ข้อ 2) เพื่อไม่ให้ thread ที่ประมวลผล tick ของหุ้นตัวอื่นต้องรอ
+    ส่งเข้า thread pool เดียวกับ place_order_async แล้วปล่อยผ่านทันที ผล/log/telegram
+    ของตัวคำสั่งเองเกิดขึ้นเบื้องหลังทั้งหมดผ่าน place_order()
+    ถ้ามี tick_ts (เวลาที่ tick ต้นเหตุเข้ามา) จะ log เวลารวมจริงตอนได้ผลคำสั่งด้วย
+    """
+    def _run():
+        t0 = time.time()
+        result = place_order(side, symbol, volume, pin, price_type)
+        t1 = time.time()
+        if tick_ts is not None:
+            logger.info(
+                f"⏱️ {symbol} {side} เวลารวม tick→ได้ผลคำสั่งจริงจาก Settrade: "
+                f"{(t1 - tick_ts) * 1000:.0f}ms (ในนั้นรอ Settrade API ตอบ {(t1 - t0) * 1000:.0f}ms) "
+                f"→ {str(result.get('msg', ''))[:100]}"
+            )
+    _order_executor.submit(_run)
 
 def _global_guards_ok():
     """ เช็คเงื่อนไขร่วมแบบเบาๆ ก่อนเสียเวลาเช็คหุ้นตัวไหนเลย """
@@ -529,23 +591,31 @@ def _global_guards_ok():
         if not was_alerted:
             msg = f"⚠️ ดึงข้อมูลพอร์ตไม่สำเร็จเกิน {STALE_POSITION_SECONDS // 60} นาที — หยุดเทรดอัตโนมัติชั่วคราวเพื่อความปลอดภัย"
             logger.warning(msg)
-            send_telegram(msg)
+            send_telegram_async(msg)
             with lock:
                 state["_stale_alerted"] = True
         return False
     elif was_alerted:
-        send_telegram("✅ ดึงข้อมูลพอร์ตกลับมาปกติแล้ว เทรดต่อได้")
+        send_telegram_async("✅ ดึงข้อมูลพอร์ตกลับมาปกติแล้ว เทรดต่อได้")
         with lock:
             state["_stale_alerted"] = False
     return True
 
-def _check_symbol_and_maybe_sell(symbol):
-    """ เช็คเงื่อนไขขายของหุ้นตัวเดียว — ยิงเรียกทันทีจาก websocket callback (ดูคอมเมนต์ด้านบน) """
+def _check_symbol_and_maybe_sell(symbol, tick_ts=None):
+    """
+    เช็คเงื่อนไขขายของหุ้นตัวเดียว — ยิงเรียกทันทีจาก websocket callback (ดูคอมเมนต์ด้านบน)
+    tick_ts: เวลาที่ tick ต้นเหตุเข้ามาจริง (time.time() จาก on_bids_offers/on_price_info)
+             ใช้ log จับเวลารวมจริง — ถ้าไม่ส่งมา (เช่นเรียกจาก bot_loop fallback) ใช้เวลา ณ ตอนนี้แทน
+    """
+    if tick_ts is None:
+        tick_ts = time.time()
+
     if not _global_guards_ok():
         return
 
     pin = os.getenv("SETTRADE_PIN")
-    sell_action = None  # เตรียม args ไว้ยิงหลังปล่อย lock: (reason_msg, held)
+    sell_action = None          # เตรียม args ไว้ยิงหลังปล่อย lock: (reason_msg, held)
+    trailing_to_persist = None  # (symbol, highest, stop) — เขียน Firebase หลังปล่อย lock เท่านั้น
 
     with lock:
         cfg = state["watchlist"].get(symbol)
@@ -606,7 +676,7 @@ def _check_symbol_and_maybe_sell(symbol):
                 if last > highest:
                     s["highest"] = last
                     s["stop"] = round(last * (1 - trailing_pct / 100.0), 2)
-                    save_trailing(symbol, s["highest"], s["stop"])  # persist กัน restart แล้วหาย
+                    trailing_to_persist = (symbol, s["highest"], s["stop"])  # เขียนหลังปล่อย lock
                 stop = s.get("stop", 0.0)
                 if stop > 0 and last <= stop:
                     msg = (f"🛑 {symbol} ราคา {last} ตกถึงจุดขาย {stop} "
@@ -614,15 +684,24 @@ def _check_symbol_and_maybe_sell(symbol):
                     logger.warning(msg)
                     s["last_action"] = msg
                     s["stop"] = 0  # ป้องกันขายซ้ำ
-                    save_trailing(symbol, s["highest"], 0)
+                    trailing_to_persist = (symbol, s["highest"], 0)  # ค่าล่าสุดชนะ (reset stop)
                     state["positions"][symbol] = 0
                     sell_action = (msg, held)
 
-    # ปล่อย lock แล้วค่อยยิงคำสั่งขาย/แจ้งเตือน (I/O ช้า ไม่ควรถือ lock ระหว่างนี้)
+    # ปล่อย lock แล้วค่อยทำ I/O ทั้งหมด (Firebase, order, telegram) — ไม่มีตัวไหน block
+    # thread นี้เลย ทุกอย่างเป็น fire-and-forget ผ่าน _io_executor/_order_executor
+    if trailing_to_persist:
+        save_trailing_async(*trailing_to_persist)
+
     if sell_action:
         msg, held = sell_action
-        place_order_async("Sell", symbol, held, pin)  # MP-MTL, timeout ไม่บล็อก
-        send_telegram(msg)
+        place_order_fire_and_forget("Sell", symbol, held, pin, tick_ts=tick_ts)
+        t_decide = time.time()
+        logger.info(
+            f"⏱️ {symbol} tick→ตัดสินใจขาย+ส่งเข้าคิว: {(t_decide - tick_ts) * 1000:.1f}ms "
+            f"(รอผลจริงจาก Settrade ดู log บรรทัดถัดไปจาก place_order_fire_and_forget)"
+        )
+        send_telegram_async(msg)
 
 def check_and_autosell_all():
     """ fallback: ไล่เช็คทุกหุ้นใน watchlist — ใช้ใน bot_loop() เผื่อหุ้นไหนไม่มี tick เข้ามาเลย """
@@ -648,7 +727,10 @@ def on_bids_offers(symbol, msg):
     ว่า subscribe ติดแล้วมีข้อมูลไหลเข้าจริงไหม
     v2.6: ปิด log นี้เป็นค่าเริ่มต้น (TICK_LOG_ENABLED=0) กันหน่วงเวลาตัดสินใจขายเวลา
     ตลาด tick ถี่ๆ — เปิดชั่วคราวตอนดีบักผ่าน env var เท่านั้น ไม่ใช่ทางหลักที่ใช้ตอนเทรดจริง
+    v2.8: จับเวลา tick_ts ตั้งแต่บรรทัดแรกสุดของ callback (ก่อนแม้แต่ lock/log) ให้ใกล้
+    เวลาที่ SDK เรียก callback จริงที่สุด ส่งต่อให้ _check_symbol_and_maybe_sell ไว้จับเวลารวม
     """
+    tick_ts = time.time()
     try:
         if TICK_LOG_ENABLED:
             logger.info(f"📥 tick bid/offer เข้า {symbol}: {msg}")
@@ -656,7 +738,7 @@ def on_bids_offers(symbol, msg):
             s = state["symbols"].setdefault(symbol, {})
             s["bids"] = normalize_book(msg.get("bids"))
             s["offers"] = normalize_book(msg.get("offers"))
-        _check_symbol_and_maybe_sell(symbol)
+        _check_symbol_and_maybe_sell(symbol, tick_ts=tick_ts)
     except Exception as e:
         logger.error(f"on_bids_offers error: {e}")
 
@@ -665,14 +747,16 @@ def on_price_info(symbol, msg):
     websocket callback — อัปเดต state แล้วเช็คขายทันที (event-driven, ไม่รอ bot_loop)
     v2.4: log ทุก tick ที่เข้ามาจริง เหตุผลเดียวกับ on_bids_offers ด้านบน
     v2.6: ปิด log นี้เป็นค่าเริ่มต้นเช่นกัน (ดูคอมเมนต์ใน on_bids_offers)
+    v2.8: จับเวลา tick_ts ตั้งแต่บรรทัดแรกสุด เหมือน on_bids_offers
     """
+    tick_ts = time.time()
     try:
         if TICK_LOG_ENABLED:
             logger.info(f"📥 tick price เข้า {symbol}: {msg}")
         with lock:
             s = state["symbols"].setdefault(symbol, {})
             s["last_price"] = msg.get("last", 0.0) or msg.get("price", 0.0)
-        _check_symbol_and_maybe_sell(symbol)
+        _check_symbol_and_maybe_sell(symbol, tick_ts=tick_ts)
     except Exception as e:
         logger.error(f"on_price_info error: {e}")
 
