@@ -936,12 +936,18 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
         if path == "/api/watchlist/remove":
             sym = data.get("symbol", "").upper().strip()
+            with lock:
+                existed_in_state = sym in state["watchlist"]
             ok = remove_watchlist_item(sym)
+            # v2.7: log ทุกครั้งที่มีการขอลบ พร้อมผลลัพธ์ชัดๆ — ช่วยแยกได้ว่า request
+            # ไปถึง server จริงไหม (ถ้าไม่มี log นี้เลย = ปัญหาอยู่ฝั่ง client/เบราว์เซอร์)
+            # ลบสำเร็จที่ Firebase ไหม (ok) และตอนขอลบ มันอยู่ใน state อยู่แล้วไหม
+            logger.info(f"🗑 ขอลบ {sym} ออกจาก watchlist (มีอยู่ใน state ก่อนลบ={existed_in_state}) → firebase_delete_ok={ok}")
             if ok:
                 with lock:
                     state["watchlist"].pop(sym, None)
                     state["symbols"].pop(sym, None)
-            self.send_json({"ok": ok})
+            self.send_json({"ok": ok, "msg": "" if ok else "ลบใน Firebase ไม่สำเร็จ ดู Render logs"})
             return
 
         self.send_json({"ok": False, "msg": "unknown path"})
@@ -1226,7 +1232,14 @@ async function toggleActive(sym){
 }
 async function removeSym(sym){
   if(!confirm('ลบ '+sym+' ออกจากรายการเฝ้า?')) return;
-  await fetch('/api/watchlist/remove',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({symbol:sym})});
+  try{
+    const r=await fetch('/api/watchlist/remove',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({symbol:sym})});
+    const res=await r.json();
+    if(!res.ok){ alert('❌ ลบไม่สำเร็จ: '+(res.msg||'ไม่ทราบสาเหตุ')); return; }
+    refresh(); // อัปเดตตารางทันทีไม่ต้องรอ interval — ถ้าโผล่กลับมาใหม่ = auto-sync เพิ่มกลับเพราะยังถือหุ้นอยู่จริง
+  }catch(e){
+    alert('❌ ส่งคำขอลบไม่สำเร็จ (เน็ตหลุด/เซิร์ฟเวอร์ไม่ตอบ): '+e);
+  }
 }
 refresh();
 setInterval(refresh,1000);
