@@ -864,15 +864,16 @@ def start_realtime():
     except Exception as e:
         logger.error(f"start_realtime error: {e}")
 
-# ===================== รีเซ็ตข้ามวันเทรด =====================
+# ===================== รีเซ็ตข้ามวันเทรด (ฉบับปรับปรุง) =====================
 def new_trading_day_reset():
     with lock:
         for sym, s in state["symbols"].items():
             s["prev_bid1_vol"] = 0
             s["prev_bid1_price"] = 0
+            s["entry_price"] = 0.0  # เพิ่มบรรทัดนี้: ล้างราคาต้นทุนวันก่อน เพื่อเริ่มจับราคาต้นทุนใหม่ของวันนี้
             s["selling"] = False  # v2.11: กันธง selling ค้างข้ามวันถ้า Render restart กลางไล่ราคา
         subscribed.clear()
-    logger.info("📅 เข้าสู่วันเทรดใหม่ → รีเซ็ต baseline บิดหาย%/ราคาตก% และบังคับ subscribe ใหม่")
+    logger.info("📅 เข้าสู่วันเทรดใหม่ → รีเซ็ต baseline บิดหาย%/ราคาตก%/ต้นทุน และบังคับ subscribe ใหม่")
 
 def bot_loop():
     global _last_trading_date
