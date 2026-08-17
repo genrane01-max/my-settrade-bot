@@ -680,27 +680,36 @@ def _check_symbol_and_maybe_sell(symbol, tick_ts=None):
         if not s:
             return
         if s.get("selling"):
-            return  # กำลังไล่ราคาขาย (chase-sell) อยู่จาก trigger ก่อนหน้า กันสั่งขายซ้ำซ้อน
+            return  # กำลังไล่ราคาขายอยู่ กันสั่งขายซ้ำซ้อน
+            
         threshold = float(cfg.get("bid_drop_pct", 60.0))
         trailing_pct = float(cfg.get("trailing_pct", 1.0))
         held = int(state["positions"].get(symbol, 0) or 0)
         if held <= 0:
+            s["entry_price"] = 0.0  # ล้างราคาต้นทุนเมื่อไม่ได้ถือหุ้นแล้ว
             return
 
         bids = s.get("bids") or []
         if bids:
             bid1_price, bid1_vol = bids[0]
             prev_vol = s.get("prev_bid1_vol", 0.0)
-            prev_price = s.get("prev_bid1_price", 0.0)
             price_threshold = float(cfg.get("price_drop_pct", 1.0))
 
+            # --- [จุดแก้ที่ 1]: บันทึกราคาแรกเข้าซื้อ (entry_price) ตรึงไว้เป็นฐานอ้างอิง ---
+            if s.get("entry_price", 0.0) <= 0 and bid1_price > 0:
+                s["entry_price"] = bid1_price
+
+            entry_price = s.get("entry_price", 0.0)
+
+            # คำนวณ % บิดหาย
             drop_vol_pct = 0.0
             if prev_vol > 0 and bid1_vol < prev_vol:
                 drop_vol_pct = (prev_vol - bid1_vol) / prev_vol * 100
 
+            # --- [จุดแก้ที่ 2]: คำนวณ % ราคาตก เทียบจาก entry_price (ไม่เลื่อนตามราคาหุ้น) ---
             drop_price_pct = 0.0
-            if prev_price > 0 and bid1_price < prev_price:
-                drop_price_pct = (prev_price - bid1_price) / prev_price * 100
+            if entry_price > 0 and bid1_price < entry_price:
+                drop_price_pct = (entry_price - bid1_price) / entry_price * 100
 
             s["drop"] = round(max(drop_vol_pct, drop_price_pct), 2)
 
@@ -711,14 +720,15 @@ def _check_symbol_and_maybe_sell(symbol, tick_ts=None):
                 if vol_triggered:
                     reasons.append(f"วอลุ่มหาย {drop_vol_pct:.1f}%")
                 if price_triggered:
-                    reasons.append(f"ราคาตก {drop_price_pct:.2f}%")
+                    reasons.append(f"ราคาตกจากต้นทุน {drop_price_pct:.2f}% (หลุดเกณฑ์ {price_threshold}%)")
                 msg = (f"🚨 {symbol} บิด {bid1_price} ({' + '.join(reasons)}) "
-                       f"→ ขาย {held} หุ้น (ไล่ราคาจนหมด) ทันที!")
+                       f"→ ขาย {held} หุ้น ทันที!")
                 logger.warning(msg)
                 s["last_action"] = msg
                 s["prev_bid1_vol"] = 0
                 s["prev_bid1_price"] = 0
-                s["selling"] = True  # v2.11: ให้ chase worker ตัด position เองตาม matched จริง
+                s["entry_price"] = 0.0  # รีเซ็ตเมื่อขาย
+                s["selling"] = True
                 sell_action = (msg, held)
             else:
                 s["prev_bid1_vol"] = bid1_vol
@@ -728,19 +738,23 @@ def _check_symbol_and_maybe_sell(symbol, tick_ts=None):
             last = s.get("last_price", 0.0)
             if last > 0:
                 highest = s.get("highest", 0.0)
-                if last > highest:
+                
+                # --- [จุดแก้ที่ 3]: บังคับสร้างจุด Stop Loss ทันที แม้หุ้นยังไม่ทำ New High ---
+                if highest <= 0 or last > highest:
                     s["highest"] = last
                     s["stop"] = round(last * (1 - trailing_pct / 100.0), 2)
                     trailing_to_persist = (symbol, s["highest"], s["stop"])
+                    
                 stop = s.get("stop", 0.0)
                 if stop > 0 and last <= stop:
                     msg = (f"🛑 {symbol} ราคา {last} ตกถึงจุดขาย {stop} "
-                           f"(สูงสุด {s['highest']} -{trailing_pct}%) → ขาย {held} หุ้น (ไล่ราคาจนหมด)")
+                           f"(สูงสุด {s['highest']} -{trailing_pct}%) → ขาย {held} หุ้น")
                     logger.warning(msg)
                     s["last_action"] = msg
                     s["stop"] = 0
+                    s["entry_price"] = 0.0  # รีเซ็ตเมื่อขาย
                     trailing_to_persist = (symbol, s["highest"], 0)
-                    s["selling"] = True  # v2.11: เหมือนกัน — ให้ chase worker ตัด position เอง
+                    s["selling"] = True
                     sell_action = (msg, held)
 
     if trailing_to_persist:
