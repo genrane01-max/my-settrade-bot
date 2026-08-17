@@ -1,5 +1,5 @@
 # ==============================================================================
-# SETTRADE BOT v2 — Watchlist หลายหุ้น + Trailing % + เทรด MP-MTL
+# SETTRADE BOT v2.2 — Watchlist หลายหุ้น + Trailing % + เทรด MP-MTL
 # - แต่ละหุ้นมีค่าเอง (บิดหาย%, trailing%) เก็บใน Firebase /watchlist/<SYMBOL>
 # - ดึงจำนวนหุ้นจากพอร์ตอัตโนมัติ → เจอเหตุการณ์ขายหมดพอร์ต
 # - ทดสอบ Sandbox ก่อน (SETTRADE_APP_CODE=SANDBOX) แล้วค่อยใช้ ALGO
@@ -17,6 +17,25 @@
 #    แล้วจุดเทรลลิ่งหายไปเงียบๆ → เพิ่ม save_trailing()/load_trailing() ลง Firebase
 # 3) หน้าเว็บ: ช่อง "หุ้น" ในโซนเทรดด่วนโดน overwrite ทับทุกวินาทีจาก polling
 #    → แก้ให้ sync ค่าตอนเลือก dropdown ครั้งเดียว ไม่ใช่ทุก refresh()
+#
+# v2.2 แก้บั๊ก:
+# 1) Watchlist ตอนนี้ sync กับพอร์ตจริงอัตโนมัติทุกรอบ (~1 วิ):
+#    - ถือหุ้นอยู่ (held > 0) แต่ยังไม่อยู่ใน watchlist → เพิ่มให้เอง (pinned=False)
+#    - หุ้นที่ไม่ได้ pin ไว้ (ไม่ได้กด + เพิ่มเอง) แล้วขายหมดพอร์ตแล้ว → เอาออกให้เอง
+#    - หุ้นที่กด + เพิ่มเองผ่านหน้าเว็บ (pinned=True) ไว้ทดสอบ/เฝ้าก่อนซื้อ ลบเองได้อิสระ
+#      ไม่โดนเอาออกอัตโนมัติแม้ position จะเป็น 0
+#    - หมายเหตุ: ลบหุ้นที่ pinned=False แต่ยังถือของอยู่จริง → รอบถัดไปจะถูกเพิ่มกลับ
+#      อัตโนมัติ เพราะยังมีของอยู่ในพอร์ตจริง เป็นกันชนความปลอดภัย ไม่ใช่บั๊ก
+# 2) เลิกบังคับใส่หุ้น default (TARGET_SYMBOL) ตอน watchlist ว่าง → ว่างได้จริงแล้ว
+#    (เดิม bot_loop() เรียก load_watchlist() ทุก 1 วิ แล้วมันยัดหุ้น default กลับเข้า
+#    Firebase ทุกครั้งที่เจอ watchlist ว่าง เลยลบออกให้ว่างจริงไม่ได้เลย)
+# 3) load_watchlist() error (Firebase สะดุดชั่วคราว) → คืนค่า None แทน {} กัน bot_loop
+#    เอาไปเคลียร์ watchlist เดิมทิ้งทั้งหมดทั้งที่ไม่มีอะไรผิดปกติจริง
+# 4) หน้าเว็บ: ช่อง บิดหาย%/ราคาตก%/Trail% ในตาราง watchlist โดน rebuild ทับทุก 1 วิ
+#    จาก polling เหมือนกับบั๊กช่อง "หุ้น" ที่เคยแก้ใน v2.1 (แต่ตอนนั้นแก้แค่ช่องเดียว
+#    ไม่ได้แก้ตาราง watchlist) → แก้ให้ข้ามการ rebuild ตารางนี้ระหว่างที่ยังโฟกัส/
+#    พิมพ์ช่องอยู่ (ใช้ focusin/focusout แบบ event delegation กันไว้ทั้งตาราง เพราะแถว
+#    ในตารางนี้เพิ่ม/หายเองได้จากการ sync พอร์ตอัตโนมัติ)
 # ==============================================================================
 
 import os
@@ -47,8 +66,8 @@ realtime = None
 state = {
     "enabled": True,          # ปุ่มเปิด-ปิดบอทรวม
     "connected": False,
-    "selected": "TTB",        # หุ้นที่กำลังดูจอบิด/ออฟเฟอร์
-    "watchlist": {},          # { SYMBOL: {bid_drop_pct, trailing_pct, price_drop_pct, active} }
+    "selected": "",            # หุ้นที่กำลังดูจอบิด/ออฟเฟอร์
+    "watchlist": {},          # { SYMBOL: {bid_drop_pct, trailing_pct, price_drop_pct, active, pinned} }
     "positions": {},          # { SYMBOL: จำนวนหุ้นที่ถือ }
     "symbols": {},            # { SYMBOL: {bids, offers, last_price, highest, stop, prev_bid1_vol, drop, last_action} }
     "pos_updated": 0,
@@ -56,7 +75,9 @@ state = {
 subscribed = set()  # หุ้นที่สตรีมอยู่แล้ว
 _last_trading_date = None  # วันเทรดล่าสุดที่เคยรีเซ็ต baseline ไปแล้ว (เวลาไทย)
 
-DEFAULT_CFG = {"bid_drop_pct": 60.0, "trailing_pct": 1.0, "price_drop_pct": 1.0, "active": True}
+# pinned=False หมายถึงหุ้นที่ระบบเพิ่มเข้ามาเองเพราะเจอในพอร์ต (auto)
+# pinned=True หมายถึงหุ้นที่กด + เพิ่มเองผ่านหน้าเว็บ (manual/ไว้ทดสอบ)
+DEFAULT_CFG = {"bid_drop_pct": 60.0, "trailing_pct": 1.0, "price_drop_pct": 1.0, "active": True, "pinned": False}
 
 # ---- ค่าตั้งความปลอดภัย (แก้ตามคุยกัน) ----
 STALE_POSITION_SECONDS = 180   # ถ้าดึงพอร์ตไม่สำเร็จเกิน 3 นาที → หยุดเทรดอัตโนมัติชั่วคราว
@@ -128,7 +149,13 @@ def init_firebase():
 init_firebase()
 
 def load_watchlist():
-    """ อ่าน /watchlist จาก Firebase → ถ้าว่าง ใส่ค่าเริ่มต้นจาก env """
+    """
+    อ่าน /watchlist จาก Firebase
+    - ไม่บังคับใส่หุ้น default เข้าไปอีกต่อไป ปล่อยให้ว่างได้จริง เพราะตอนนี้
+      sync_watchlist_with_portfolio() จะเพิ่ม/ลบให้อัตโนมัติตามพอร์ตจริงอยู่แล้ว
+    - ถ้า Firebase อ่านพลาด (error) คืนค่า None แทน {} เพื่อไม่ให้ bot_loop เอาไปเคลียร์
+      watchlist เดิมทิ้งทั้งหมดเพราะ Firebase สะดุดชั่วคราว
+    """
     try:
         data = db.reference("watchlist").get() or {}
         wl = {}
@@ -139,15 +166,12 @@ def load_watchlist():
                     "trailing_pct": float(cfg.get("trailing_pct", DEFAULT_CFG["trailing_pct"])),
                     "price_drop_pct": float(cfg.get("price_drop_pct", DEFAULT_CFG["price_drop_pct"])),
                     "active": bool(cfg.get("active", True)),
+                    "pinned": bool(cfg.get("pinned", False)),
                 }
-        if not wl:
-            sym = os.getenv("TARGET_SYMBOL", "TTB").upper().strip()
-            wl[sym] = dict(DEFAULT_CFG)
-            save_watchlist_item(sym, wl[sym])
         return wl
     except Exception as e:
         logger.error(f"load_watchlist error: {e}")
-        return {os.getenv("TARGET_SYMBOL", "TTB").upper(): dict(DEFAULT_CFG)}
+        return None
 
 def save_watchlist_item(symbol, cfg):
     try:
@@ -165,7 +189,7 @@ def remove_watchlist_item(symbol):
         logger.error(f"remove_watchlist_item error: {e}")
         return False
 
-# ---- เทรลลิ่งสต็อป (highest/stop) — persist กัน restart แล้วจุดขายหาย ----
+# ---- เทรลลิ่งสต็อป (highest/stop) — persist กัน restart แล้วจุดเทรลลิ่งหาย ----
 def save_trailing(symbol, highest, stop):
     try:
         db.reference(f"trailing/{symbol.upper()}").set({
@@ -287,6 +311,56 @@ def refresh_positions(force=False):
             state["pos_updated"] = now
     except Exception as e:
         logger.error(f"get_portfolio error: {e}")
+
+def sync_watchlist_with_portfolio():
+    """
+    ซิงก์ watchlist กับพอร์ตจริงอัตโนมัติ ทุกรอบ bot_loop (~1 วิ):
+    - ถือหุ้นอยู่ (held > 0) แต่ยังไม่อยู่ใน watchlist → เพิ่มให้อัตโนมัติ (pinned=False)
+      กันเคสถือของอยู่จริงแต่บอทไม่รู้จัก เลยไม่มีการป้องกันเทรลลิ่ง/บิดหายให้
+    - หุ้นที่ไม่ได้กด "เพิ่มหุ้นใหม่" เอง (pinned=False) แล้วขายหมดพอร์ตแล้ว (held<=0)
+      → เอาออกจาก watchlist อัตโนมัติ ไม่ต้องกดลบเอง
+    - หุ้นที่เพิ่มเองผ่านหน้าเว็บ (pinned=True) จะไม่ถูกลบอัตโนมัติ ไว้ทดสอบระบบ/
+      เฝ้าดูก่อนซื้อได้ ต้องกดลบเองเท่านั้น
+    หมายเหตุ: กดลบหุ้นที่ยังถืออยู่จริง (pinned=False) → รอบถัดไปจะถูกเพิ่มกลับอัตโนมัติ
+    เพราะยังมีของอยู่ในพอร์ตจริง เป็นกันชนความปลอดภัย ไม่ใช่บั๊ก
+    """
+    with lock:
+        positions = dict(state["positions"])
+        watchlist = dict(state["watchlist"])
+
+    to_add = {sym: vol for sym, vol in positions.items() if vol and vol > 0 and sym not in watchlist}
+    to_remove = [
+        sym for sym, cfg in watchlist.items()
+        if not cfg.get("pinned", False) and int(positions.get(sym, 0) or 0) <= 0
+    ]
+
+    if not to_add and not to_remove:
+        return
+
+    for sym, vol in to_add.items():
+        cfg = dict(DEFAULT_CFG)
+        cfg["pinned"] = False
+        if save_watchlist_item(sym, cfg):
+            watchlist[sym] = cfg
+            msg = f"📌 พบหุ้น {sym} ในพอร์ต ({vol} หุ้น) → เพิ่มเข้า watchlist อัตโนมัติ"
+            logger.info(msg)
+            send_telegram(msg)
+
+    for sym in to_remove:
+        if remove_watchlist_item(sym):
+            watchlist.pop(sym, None)
+            logger.info(f"📭 {sym} ขายหมดพอร์ตแล้ว → เอาออกจาก watchlist อัตโนมัติ")
+
+    with lock:
+        state["watchlist"] = watchlist
+        for sym in to_remove:
+            state["symbols"].pop(sym, None)
+        for sym in watchlist:
+            if sym not in state["symbols"]:
+                h, st = load_trailing(sym)
+                state["symbols"][sym] = {"highest": h, "stop": st}
+
+    ensure_subscribe([s for s, c in watchlist.items() if c.get("active", True)])
 
 def place_order(side, symbol, volume, pin, price_type="MP-MTL"):
     """ side='Buy'/'Sell' — MP-MTL เสมอ (กันราคาหลุดไกล) """
@@ -419,8 +493,8 @@ def start_realtime():
     global realtime
     try:
         realtime = investor.RealtimeDataConnection()
-        wl = load_watchlist()
-        ensure_subscribe([s for s, c in wl.items() if c["active"]])
+        wl = load_watchlist() or {}
+        ensure_subscribe([s for s, c in wl.items() if c.get("active", True)])
         logger.info("🔌 Realtime subscribe เรียบร้อย (SDK จัดการ connection เบื้องหลังเอง ไม่ต้อง run())")
         while True:
             time.sleep(3600)
@@ -563,15 +637,20 @@ def bot_loop():
                 _last_trading_date = today
 
             wl = load_watchlist()
+            if wl is not None:
+                with lock:
+                    state["watchlist"] = wl
+                    # หุ้นใหม่ในวอตช์ลิสต์ → โหลดจุดเทรลลิ่งเดิม (ของวันนี้เท่านั้น) กลับมา
+                    for sym in wl:
+                        if sym not in state["symbols"]:
+                            h, st = load_trailing(sym)
+                            state["symbols"][sym] = {"highest": h, "stop": st}
+
             with lock:
-                state["watchlist"] = wl
-                # หุ้นใหม่ในวอตช์ลิสต์ → โหลดจุดเทรลลิ่งเดิม (ของวันนี้เท่านั้น) กลับมา
-                for sym in wl:
-                    if sym not in state["symbols"]:
-                        h, st = load_trailing(sym)
-                        state["symbols"][sym] = {"highest": h, "stop": st}
-            ensure_subscribe([s for s, c in wl.items() if c["active"]])
+                active_syms = [s for s, c in state["watchlist"].items() if c.get("active", True)]
+            ensure_subscribe(active_syms)
             refresh_positions()
+            sync_watchlist_with_portfolio()  # เพิ่ม/ลบ watchlist อัตโนมัติตามพอร์ตจริง
             check_and_autosell()
         except Exception as e:
             logger.error(f"Bot Loop Error: {e}")
@@ -637,7 +716,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
 
         if path == "/api/select":
-            sym = data.get("symbol", "TTB").upper().strip()
+            sym = data.get("symbol", "").upper().strip()
             with lock:
                 state["selected"] = sym
             self.send_json({"ok": True})
@@ -664,6 +743,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 "trailing_pct": float(data.get("trailing_pct", 1.0)),
                 "price_drop_pct": float(data.get("price_drop_pct", 1.0)),
                 "active": True,
+                "pinned": True,  # เพิ่มเองผ่านหน้าเว็บ = pin ไว้ ไม่โดนลบอัตโนมัติตอนพอร์ตว่าง (ไว้ทดสอบ)
             }
             ok = save_watchlist_item(sym, cfg)
             if ok:
@@ -675,7 +755,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
         if path == "/api/watchlist/update":
             sym = data.get("symbol", "").upper().strip()
-            if sym not in state["watchlist"]:
+            with lock:
+                existing = state["watchlist"].get(sym)
+            if existing is None:
                 self.send_json({"ok": False, "msg": "ไม่พบหุ้นนี้"})
                 return
             cfg = {
@@ -683,6 +765,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 "trailing_pct": float(data.get("trailing_pct", 1.0)),
                 "price_drop_pct": float(data.get("price_drop_pct", 1.0)),
                 "active": bool(data.get("active", True)),
+                "pinned": bool(existing.get("pinned", False)),  # แก้ผ่านหน้าเว็บไม่ได้ กันเผลอ pin/unpin
             }
             ok = save_watchlist_item(sym, cfg)
             if ok:
@@ -787,10 +870,11 @@ HTML = """<!DOCTYPE html>
   <!-- โซน 4: Watchlist -->
   <div class="card">
     <div style="font-weight:bold;margin-bottom:8px;">📋 รายการเฝ้า (Watchlist)</div>
-    <div style="font-size:11px;color:#64748b;margin-bottom:6px;">บิดหาย% หรือ ราคาตก% (แล้วแต่อันไหนถึงก่อน) → ขายหมดพอร์ตทันที</div>
+    <div style="font-size:11px;color:#64748b;margin-bottom:4px;">บิดหาย% หรือ ราคาตก% (แล้วแต่อันไหนถึงก่อน) → ขายหมดพอร์ตทันที</div>
+    <div style="font-size:11px;color:#64748b;margin-bottom:6px;">🔒 = หุ้นที่ถืออยู่จริง ระบบเพิ่มให้อัตโนมัติ ลบแล้วจะเพิ่มกลับถ้ายังถือของอยู่ (ขายหมดจะหายเอง) ส่วนหุ้นที่กด + เพิ่มเอง ลบได้อิสระ ไว้ทดสอบ</div>
     <div id="wlBody"></div>
     <div style="border-top:1px solid #263449;margin:10px 0;"></div>
-    <div style="font-size:12px;color:#94a3b8;margin-bottom:6px;">➕ เพิ่มหุ้นใหม่</div>
+    <div style="font-size:12px;color:#94a3b8;margin-bottom:6px;">➕ เพิ่มหุ้นใหม่ (ไว้ทดสอบ/เฝ้าก่อนซื้อ)</div>
     <div class="row">
       <div class="grow"><input id="newSym" placeholder="เช่น AOT" style="text-transform:uppercase;"></div>
       <div style="width:60px;"><input id="newDrop" type="number" value="60" title="บิดหาย%"></div>
@@ -813,13 +897,24 @@ HTML = """<!DOCTYPE html>
 
 <script>
 let pending=null;
-let userTypingSymbol=false; // true ระหว่างที่ผู้ใช้กำลังโฟกัส/พิมพ์ช่องหุ้นเอง
+let userTypingSymbol=false; // true ระหว่างที่ผู้ใช้กำลังโฟกัส/พิมพ์ช่องหุ้นเทรดด่วนเอง
+let wlFocusedId=null;       // id ของ input ในตาราง watchlist ที่กำลังโฟกัสอยู่ (ถ้ามี)
 const fmt=n=>n==null||n===0?'--':Number(n).toLocaleString('en-US');
 
 document.addEventListener('DOMContentLoaded', ()=>{
   const el = document.getElementById('tradeSymbol');
   el.addEventListener('focus', ()=>{ userTypingSymbol=true; });
   el.addEventListener('blur', ()=>{ userTypingSymbol=false; });
+});
+
+// กันบั๊ก: polling ทุก 1 วิ เคย rebuild ตาราง watchlist ทับช่องที่กำลังพิมพ์อยู่จนพิมพ์
+// ไม่ติด — ใช้ focusin/focusout แบบ event delegation เพราะแถวในตารางนี้เพิ่ม/หายเองได้
+// จากการ sync พอร์ตอัตโนมัติ (ผูก listener ตรงๆ กับแต่ละ input ไม่พอ)
+document.addEventListener('focusin', e=>{
+  if(e.target && e.target.closest && e.target.closest('#wlBody')) wlFocusedId = e.target.id;
+});
+document.addEventListener('focusout', e=>{
+  if(e.target && e.target.id === wlFocusedId) wlFocusedId = null;
 });
 
 async function refresh(){
@@ -859,23 +954,32 @@ async function refresh(){
       html+=`<tr><td class="yellow mono">${b[1]?fmt(b[1]):''}</td><td class="red mono">${b[0]?fmt(b[0]):''}</td><td></td><td class="green mono">${o[0]?fmt(o[0]):''}</td><td class="yellow mono">${o[1]?fmt(o[1]):''}</td></tr>`;
     }
     tbody.innerHTML=html||'<tr><td colspan="5" style="color:#64748b;">รอข้อมูล...</td></tr>';
-    // watchlist rows
-    const wl=document.getElementById('wlBody');
-    let whtml='<table><tr><th>หุ้น</th><th>ถือ</th><th>บิดหาย%</th><th>ราคาตก%</th><th>Trail%</th><th>บน/ปิด</th><th></th></tr>';
-    for(const k of keys){
-      const c=s.watchlist[k]||{};
-      whtml+=`<tr class="wl-row">
-        <td><b>${k}</b></td>
-        <td class="yellow mono">${(s.positions&&s.positions[k])||0}</td>
-        <td><input id="d_${k}" type="number" value="${c.bid_drop_pct}" onchange="updateRow('${k}')"></td>
-        <td><input id="p_${k}" type="number" step="0.1" value="${c.price_drop_pct!=null?c.price_drop_pct:1.0}" onchange="updateRow('${k}')"></td>
-        <td><input id="t_${k}" type="number" step="0.1" value="${c.trailing_pct}" onchange="updateRow('${k}')"></td>
-        <td><button class="${c.active?'btn-buy':'btn-ghost'}" onclick="toggleActive('${k}')">${c.active?'🟢':'⚪'}</button></td>
-        <td><button class="btn-danger" onclick="removeSym('${k}')">🗑</button></td>
-      </tr>`;
+
+    // watchlist rows — ข้ามการ rebuild ทั้งบล็อกนี้ถ้ากำลังโฟกัส/พิมพ์ช่องไหนอยู่ในตารางนี้
+    if(!wlFocusedId){
+      const wl=document.getElementById('wlBody');
+      if(keys.length===0){
+        wl.innerHTML='<div style="color:#64748b;font-size:13px;padding:4px 0;">ยังไม่มีหุ้นในรายการเฝ้า — ถ้าถือหุ้นอยู่จะเพิ่มให้อัตโนมัติ หรือกด + เพิ่มเองด้านล่างเพื่อทดสอบ</div>';
+      } else {
+        let whtml='<table><tr><th>หุ้น</th><th>ถือ</th><th>บิดหาย%</th><th>ราคาตก%</th><th>Trail%</th><th>บน/ปิด</th><th></th></tr>';
+        for(const k of keys){
+          const c=s.watchlist[k]||{};
+          const held=(s.positions&&s.positions[k])||0;
+          const autoTag=(!c.pinned && held>0)?' <span style="font-size:10px;color:#64748b;">🔒</span>':'';
+          whtml+=`<tr class="wl-row">
+            <td><b>${k}</b>${autoTag}</td>
+            <td class="yellow mono">${held}</td>
+            <td><input id="d_${k}" type="number" value="${c.bid_drop_pct}" onchange="updateRow('${k}')"></td>
+            <td><input id="p_${k}" type="number" step="0.1" value="${c.price_drop_pct!=null?c.price_drop_pct:1.0}" onchange="updateRow('${k}')"></td>
+            <td><input id="t_${k}" type="number" step="0.1" value="${c.trailing_pct}" onchange="updateRow('${k}')"></td>
+            <td><button class="${c.active?'btn-buy':'btn-ghost'}" onclick="toggleActive('${k}')">${c.active?'🟢':'⚪'}</button></td>
+            <td><button class="btn-danger" onclick="removeSym('${k}')">🗑</button></td>
+          </tr>`;
+        }
+        whtml+='</table>';
+        wl.innerHTML=whtml;
+      }
     }
-    whtml+='</table>';
-    wl.innerHTML=whtml;
   }catch(e){}
 }
 async function toggleBot(){ await fetch('/api/toggle',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}); }
@@ -937,10 +1041,10 @@ setInterval(refresh,1000);
 def main():
     global _last_trading_date
     init_settrade()
-    wl = load_watchlist()
+    wl = load_watchlist() or {}
     with lock:
         state["watchlist"] = wl
-        state["selected"] = list(wl.keys())[0]
+        state["selected"] = next(iter(wl), "")
         for sym in wl:
             h, st = load_trailing(sym)
             state["symbols"][sym] = {"highest": h, "stop": st}
