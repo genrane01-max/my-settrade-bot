@@ -18,12 +18,11 @@
 # v2.8: แก้คอขวดความเร็ว — save_trailing/send_telegram/place_order (auto-sell) เป็น
 # fire-and-forget ผ่าน thread pool แยก ไม่ block thread ที่กำลังเช็คหุ้นตัวอื่น
 #
-# v2.9 (รอบนี้): เพิ่มตัวเลือก "จำกัดราคา (Limit)" ในปุ่มเทรดด่วนของหน้าเว็บ
+# v2.9 เพิ่มตัวเลือก "จำกัดราคา (Limit)" ในปุ่มเทรดด่วนของหน้าเว็บ
 #   - เดิม /api/order ยิง MP-MTL (ราคาตลาด) เสมอ ไม่มีทางระบุราคาเอง ถ้าหุ้นตัวนั้น
 #     กระดานบางมาก ซื้อ 100 หุ้นอาจไล่ราคาขึ้นหลายช่วงราคา ต้นทุนจริงสูงกว่าที่คิดไว้มาก
 #   - เพิ่ม dropdown "ประเภทคำสั่ง" (ตลาด/จำกัดราคา) — เลือก "จำกัดราคา" แล้วจะโชว์
-#     ช่องกรอกราคา บังคับกรอกก่อนยืนยันได้ (ห้ามเป็น 0/ว่าง) ราคาเริ่มต้น auto-fill
-#     จากราคาล่าสุดที่จอแสดงอยู่ให้เอง แก้ได้ก่อนยืนยัน
+#     ช่องกรอกราคา บังคับกรอกก่อนยืนยันได้ (ห้ามเป็น 0/ว่าง)
 #   - place_order() เพิ่ม parameter price รับค่าจริงจากหน้าเว็บ (เดิม hardcode 0.0
 #     เสมอ ทำให้ Limit ไม่มีทางทำงานถูกได้เลยแม้จะส่ง price_type="Limit" ไปก็ตาม)
 #   - สำคัญ: ตรรกะ auto-sell (_check_symbol_and_maybe_sell → place_order_fire_and_forget)
@@ -31,6 +30,12 @@
 #     กลไกความปลอดภัยที่ต้องการ "รับประกันว่าขายได้" ตอนเกิดเหตุฉุกเฉิน การใส่ราคาจำกัด
 #     เข้าไปจะขัดกับจุดประสงค์เดิม (อาจขายไม่ออกเพราะราคาที่ตั้งไว้ไม่มีคนรับซื้อ)
 #     Limit ใช้ได้เฉพาะเทรดด่วนที่คุณกดเองในหน้าเว็บเท่านั้น
+#
+# v2.10 แก้: v2.9 เคย auto-fill ช่องราคาด้วยราคาล่าสุดที่ "เลือกหุ้นดูจอ" (dropdown บนสุด)
+#   กำลังแสดงอยู่ — แต่ช่อง "หุ้น" ในเทรดด่วนกับ dropdown นั้นเป็นคนละตัวแปรกัน (ตั้งใจแยก
+#   กันไว้ตั้งแต่แรกกันพิมพ์โดน overwrite) ถ้าผู้ใช้พิมพ์ชื่อหุ้นเองในช่องเทรดด่วนโดยไม่ได้
+#   เลือกจาก dropdown ก่อน ราคาที่ auto-fill มาอาจเป็นของหุ้นคนละตัว เสี่ยงกดซื้อผิดราคาไป
+#   โดยไม่รู้ตัว → เอา auto-fill ออกทั้งหมด ช่องราคาว่างเปล่าเสมอ บังคับพิมพ์เองทุกครั้ง
 # ==============================================================================
 
 import os
@@ -954,7 +959,7 @@ HTML = """<!DOCTYPE html>
       </div>
       <div class="grow" id="tradePriceWrap" style="display:none;">
         <label>ราคาที่ต้องการ (บาท)</label>
-        <input id="tradePrice" type="number" step="0.01" inputmode="decimal" placeholder="เช่น 12.50">
+        <input id="tradePrice" type="number" step="0.01" inputmode="decimal" placeholder="พิมพ์ราคาที่ต้องการเอง">
       </div>
     </div>
     <label>PIN</label>
@@ -1011,7 +1016,6 @@ let modalConfirmFn=null;
 let pendingRemoveSym=null;
 let userTypingSymbol=false;
 let wlFocusedId=null;
-let lastDisplayedPrice=0;   // v2.9: ราคาล่าสุดที่จอแสดง ไว้ auto-fill ช่อง Limit
 const fmt=n=>n==null||n===0?'--':Number(n).toLocaleString('en-US');
 
 document.addEventListener('DOMContentLoaded', ()=>{
@@ -1028,12 +1032,13 @@ document.addEventListener('focusout', e=>{
 });
 
 function togglePriceField(){
+  // v2.10: ไม่ auto-fill ราคาให้อีกต่อไป — เดิมเคยดึงราคาล่าสุดที่จอ "เลือกหุ้นดูจอ" แสดงอยู่
+  // มาใส่ให้เอง แต่ช่องนั้นกับช่อง "หุ้น" ในเทรดด่วนเป็นคนละตัวแปรกัน (ตั้งใจแยกกันไว้กัน
+  // การพิมพ์โดน overwrite) ถ้าผู้ใช้พิมพ์ชื่อหุ้นในช่องเทรดด่วนเองโดยไม่ได้เลือกจาก dropdown
+  // ก่อน ราคาที่ auto-fill มาอาจเป็นราคาของหุ้นคนละตัวโดยไม่รู้ตัว เสี่ยงกดซื้อผิดราคาไปเลย
+  // ตอนนี้ช่องราคาว่างเปล่าเสมอ บังคับให้พิมพ์เองทุกครั้ง เป็นตัวเลขที่ผู้ใช้ตัดสินใจเองจริงๆ
   const isLimit = document.getElementById('tradePriceType').value === 'Limit';
   document.getElementById('tradePriceWrap').style.display = isLimit ? '' : 'none';
-  if(isLimit){
-    const priceInput = document.getElementById('tradePrice');
-    if(!priceInput.value && lastDisplayedPrice) priceInput.value = lastDisplayedPrice;
-  }
 }
 
 async function refresh(){
@@ -1052,7 +1057,6 @@ async function refresh(){
       sel.innerHTML=keys.map(k=>`<option value="${k}" ${k===s.selected?'selected':''}>${k}</option>`).join('')||'<option>--</option>';
     }
     const d=s.selected_data||{};
-    lastDisplayedPrice = d.last_price || 0;
     document.getElementById('priceTxt').textContent=d.last_price?fmt(d.last_price):'--';
     document.getElementById('posTxt').textContent=(s.positions&&s.positions[s.selected])||0;
     document.getElementById('highestTxt').textContent=d.highest?fmt(d.highest):'--';
