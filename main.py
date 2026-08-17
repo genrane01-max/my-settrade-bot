@@ -1,5 +1,5 @@
 # ==============================================================================
-# SETTRADE BOT v2.4 — Watchlist หลายหุ้น + Trailing % + เทรด MP-MTL
+# SETTRADE BOT v2.9 — Watchlist หลายหุ้น + Trailing % + เทรด MP-MTL/Limit
 # - แต่ละหุ้นมีค่าเอง (บิดหาย%, trailing%) เก็บใน Firebase /watchlist/<SYMBOL>
 # - ดึงจำนวนหุ้นจากพอร์ตอัตโนมัติ → เจอเหตุการณ์ขายหมดพอร์ต
 # - ทดสอบ Sandbox ก่อน (SETTRADE_APP_CODE=SANDBOX) แล้วค่อยใช้ ALGO
@@ -11,61 +11,26 @@
 # หลายแบบ ถ้าไม่เจอเลยจะ log รายชื่อ method จริงที่มีอยู่ใน object นั้นออกมาที่ Render
 # logs ให้เห็นเลย จะได้แก้ให้ตรงเป๊ะได้ในทีเดียว
 #
-# v2.1 แก้บั๊ก:
-# 1) prev_bid1_vol / subscribed เคยค้างข้ามวัน → เปิดตลาดเช้าเสี่ยงโดนขายหมดพอร์ต
-#    เพราะเทียบวอลุ่มบิดกับเมื่อคืน → เพิ่ม new_trading_day_reset() รีเซ็ตทุกวันใหม่
-# 2) highest/stop (trailing stop) เก็บใน memory ล้วนๆ → รีสตาร์ท/restart Render
-#    แล้วจุดเทรลลิ่งหายไปเงียบๆ → เพิ่ม save_trailing()/load_trailing() ลง Firebase
-# 3) หน้าเว็บ: ช่อง "หุ้น" ในโซนเทรดด่วนโดน overwrite ทับทุกวินาทีจาก polling
-#    → แก้ให้ sync ค่าตอนเลือก dropdown ครั้งเดียว ไม่ใช่ทุก refresh()
+# v2.1-v2.7: ดูรายละเอียดในไฟล์เวอร์ชันก่อนหน้า (รีเซ็ตข้ามวัน, trailing persist,
+# input polling fix, watchlist auto-sync กับพอร์ต, event-driven check, order log,
+# lunch break, modal confirm แทน native confirm())
 #
-# v2.2 แก้บั๊ก:
-# 1) Watchlist ตอนนี้ sync กับพอร์ตจริงอัตโนมัติทุกรอบ (~1 วิ):
-#    - ถือหุ้นอยู่ (held > 0) แต่ยังไม่อยู่ใน watchlist → เพิ่มให้เอง (pinned=False)
-#    - หุ้นที่ไม่ได้ pin ไว้ (ไม่ได้กด + เพิ่มเอง) แล้วขายหมดพอร์ตแล้ว → เอาออกให้เอง
-#    - หุ้นที่กด + เพิ่มเองผ่านหน้าเว็บ (pinned=True) ไว้ทดสอบ/เฝ้าก่อนซื้อ ลบเองได้อิสระ
-#      ไม่โดนเอาออกอัตโนมัติแม้ position จะเป็น 0
-#    - หมายเหตุ: ลบหุ้นที่ pinned=False แต่ยังถือของอยู่จริง → รอบถัดไปจะถูกเพิ่มกลับ
-#      อัตโนมัติ เพราะยังมีของอยู่ในพอร์ตจริง เป็นกันชนความปลอดภัย ไม่ใช่บั๊ก
-# 2) เลิกบังคับใส่หุ้น default (TARGET_SYMBOL) ตอน watchlist ว่าง → ว่างได้จริงแล้ว
-#    (เดิม bot_loop() เรียก load_watchlist() ทุก 1 วิ แล้วมันยัดหุ้น default กลับเข้า
-#    Firebase ทุกครั้งที่เจอ watchlist ว่าง เลยลบออกให้ว่างจริงไม่ได้เลย)
-# 3) load_watchlist() error (Firebase สะดุดชั่วคราว) → คืนค่า None แทน {} กัน bot_loop
-#    เอาไปเคลียร์ watchlist เดิมทิ้งทั้งหมดทั้งที่ไม่มีอะไรผิดปกติจริง
-# 4) หน้าเว็บ: ช่อง บิดหาย%/ราคาตก%/Trail% ในตาราง watchlist โดน rebuild ทับทุก 1 วิ
-#    จาก polling เหมือนกับบั๊กช่อง "หุ้น" ที่เคยแก้ใน v2.1 (แต่ตอนนั้นแก้แค่ช่องเดียว
-#    ไม่ได้แก้ตาราง watchlist) → แก้ให้ข้ามการ rebuild ตารางนี้ระหว่างที่ยังโฟกัส/
-#    พิมพ์ช่องอยู่ (ใช้ focusin/focusout แบบ event delegation กันไว้ทั้งตาราง เพราะแถว
-#    ในตารางนี้เพิ่ม/หายเองได้จากการ sync พอร์ตอัตโนมัติ)
+# v2.8: แก้คอขวดความเร็ว — save_trailing/send_telegram/place_order (auto-sell) เป็น
+# fire-and-forget ผ่าน thread pool แยก ไม่ block thread ที่กำลังเช็คหุ้นตัวอื่น
 #
-# v2.3 แก้: เปลี่ยนตรรกะเช็คขายจาก polling (รอ loop รอบถัดไป ~1 วิ) เป็น event-driven
-#    (ยิงเช็คทันทีตอน websocket ส่ง tick ใหม่เข้ามา) — ดูรายละเอียดที่คอมเมนต์
-#    เหนือ _check_symbol_and_maybe_sell() ด้านล่าง
-#
-# v2.4 แก้:
-# 1) เพิ่ม log ทุกครั้งที่มี tick (bid/offer, price) เข้ามาจริงจาก websocket
-#    (on_bids_offers/on_price_info) เพราะเดิม log แค่ตอน "subscribe สำเร็จ" ซึ่งไม่ได้
-#    แปลว่าจะมีข้อมูลจริงวิ่งเข้ามา (เช่น Sandbox บางโบรกไม่ส่ง order book จริงให้)
-#    เปิด log ใหม่นี้จะเช็คได้ชัดว่า subscribe ติดจริงหรือแค่ค้างรอเฉยๆ
-# 2) refresh_positions(): เดิม log เป็น WARNING ทุกครั้งที่ portfolioList ว่างเปล่า
-#    ทั้งที่ "พอร์ตว่างจริง" (ไม่มีหุ้นถืออยู่เลย) กับ "แปลง field ไม่ได้จริง" เป็นคนละเคส
-#    → แยกสองเคสนี้ออกจากกัน ไม่ log warning ตอนพอร์ตว่างจริง กัน log หลอกให้ตกใจ
-# 3) เพิ่ม order_log: เก็บประวัติคำสั่งซื้อ/ขาย 20 รายการล่าสุดไว้ใน state (มีเวลา/
-#    ผล/ข้อความตอบกลับ) ส่งออกทาง /api/state และแสดงเป็นรายการในหน้าเว็บ กันปัญหา
-#    เดิมที่รู้ผลคำสั่งได้แค่ผ่าน alert() ที่หายไปทันทีที่ปิด popup
-# 4) เพิ่มการ์ด "พอร์ตปัจจุบัน" ในหน้าเว็บ แสดง state["positions"] ดิบๆ ตรงๆ จาก
-#    get_portfolios() โดยไม่ผ่านตรรกะกรอง/sync ของ watchlist เลย ไว้เช็คว่าพอร์ตจริง
-#    มีอะไรบ้าง แยกจากตาราง watchlist ที่ถูกกรองแล้ว
-#
-# v2.5 แก้: is_market_hours() หักช่วงพักเที่ยง 12:30-14:30 น. ออกด้วย (ดู
-#    MARKET_LUNCH_START_HHMM/MARKET_LUNCH_END_HHMM) + /api/order เช็คก่อนยิงจริง
-#    แจ้งเหตุผลที่เข้าใจง่ายแทน error ดิบจาก gateway
-#
-# v2.6 แก้: TICK_LOG_ENABLED (env var) คุมว่าจะ log ทุก tick ที่เข้ามาไหม ปิดเป็น
-#    ค่าเริ่มต้นกันหน่วงตอนตลาด tick ถี่ๆ
-#
-# v2.7 แก้: ใช้ modal ในหน้าเว็บแทน native confirm() ตอนลบหุ้น (บาง webview บล็อก
-#    confirm() เงียบๆ) + log ทุกครั้งที่มีการขอลบ watchlist พร้อมผลลัพธ์
+# v2.9 (รอบนี้): เพิ่มตัวเลือก "จำกัดราคา (Limit)" ในปุ่มเทรดด่วนของหน้าเว็บ
+#   - เดิม /api/order ยิง MP-MTL (ราคาตลาด) เสมอ ไม่มีทางระบุราคาเอง ถ้าหุ้นตัวนั้น
+#     กระดานบางมาก ซื้อ 100 หุ้นอาจไล่ราคาขึ้นหลายช่วงราคา ต้นทุนจริงสูงกว่าที่คิดไว้มาก
+#   - เพิ่ม dropdown "ประเภทคำสั่ง" (ตลาด/จำกัดราคา) — เลือก "จำกัดราคา" แล้วจะโชว์
+#     ช่องกรอกราคา บังคับกรอกก่อนยืนยันได้ (ห้ามเป็น 0/ว่าง) ราคาเริ่มต้น auto-fill
+#     จากราคาล่าสุดที่จอแสดงอยู่ให้เอง แก้ได้ก่อนยืนยัน
+#   - place_order() เพิ่ม parameter price รับค่าจริงจากหน้าเว็บ (เดิม hardcode 0.0
+#     เสมอ ทำให้ Limit ไม่มีทางทำงานถูกได้เลยแม้จะส่ง price_type="Limit" ไปก็ตาม)
+#   - สำคัญ: ตรรกะ auto-sell (_check_symbol_and_maybe_sell → place_order_fire_and_forget)
+#     ยังคงยิง MP-MTL เท่านั้นเหมือนเดิมทุกประการ ไม่เปิดให้เลือกราคาเด็ดขาด เพราะเป็น
+#     กลไกความปลอดภัยที่ต้องการ "รับประกันว่าขายได้" ตอนเกิดเหตุฉุกเฉิน การใส่ราคาจำกัด
+#     เข้าไปจะขัดกับจุดประสงค์เดิม (อาจขายไม่ออกเพราะราคาที่ตั้งไว้ไม่มีคนรับซื้อ)
+#     Limit ใช้ได้เฉพาะเทรดด่วนที่คุณกดเองในหน้าเว็บเท่านั้น
 # ==============================================================================
 
 import os
@@ -76,7 +41,7 @@ import datetime
 import threading
 import concurrent.futures
 from functools import partial
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import parse_qs, urlparse
 
 import requests
@@ -115,32 +80,19 @@ STALE_POSITION_SECONDS = 180   # ถ้าดึงพอร์ตไม่ส�
 SELL_ORDER_TIMEOUT = 2         # วินาที — รอคำตอบคำสั่งขายไม่เกินนี้ ไม่บล็อก loop หลัก (ไม่ยิงซ้ำอัตโนมัติ)
 MARKET_OPEN_HHMM = (9, 55)     # เผื่อช่วง pre-open/ATO ก่อนตลาดเปิดจริง 10:00
 MARKET_CLOSE_HHMM = (16, 40)   # เผื่อช่วง ATC/หลังปิด
-# v2.5: ตลาดหุ้นไทย (SET) พักเที่ยง 12:30-14:30 น. ทุกวัน — ช่วงนี้ไม่รับ Market order
-# เดิม is_market_hours() เช็คแค่ 9:55-16:40 เป็นช่วงเดียวยาวๆ ไม่ได้หักพักเที่ยงออก
-# ทำให้บอทคิดว่าตลาดเปิดทั้งที่ Settrade gateway ปฏิเสธคำสั่งจริง (SEOSGW-01 "market is not open")
 MARKET_LUNCH_START_HHMM = (12, 30)
 MARKET_LUNCH_END_HHMM = (14, 30)
 BOT_LOOP_INTERVAL = 2          # วิ — งานพื้นหลัง (sync watchlist/positions) ไม่ต้องไวเท่าเช็คขาย
 ORDER_LOG_MAX = 20             # เก็บประวัติคำสั่งซื้อ/ขายไว้กี่รายการล่าสุด
-# v2.6: log ทุก tick ที่เข้ามา (on_bids_offers/on_price_info) มีประโยชน์ตอนดีบักว่า
-# subscribe ติดจริงไหม แต่รันอยู่ในเธรดเดียวกับที่ตัดสินใจขาย (ก่อนเรียกเช็คขายด้วยซ้ำ)
-# ถ้าตลาด tick ถี่มากช่วงผันผวน การเขียน log ทุกครั้งอาจหน่วงเพิ่มเล็กน้อยได้ — ปิดไว้เป็น
-# ค่าเริ่มต้น (False) เพื่อไม่ให้กระทบความไวของการขาย เปิดชั่วคราวตอนอยากดีบักเท่านั้น
-# โดยตั้ง env var TICK_LOG_ENABLED=1 บน Render
 TICK_LOG_ENABLED = os.getenv("TICK_LOG_ENABLED", "0") == "1"
 
 _order_executor = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="order")
+_io_executor = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="io")
 
 # ===================== ตัวช่วยหา method ของ SDK แบบยืดหยุ่น =====================
-_warned_missing = set()  # กัน log ซ้ำรัวๆ ต่อ object/label เดิม
+_warned_missing = set()
 
 def _resolve_method(obj, candidates, label=""):
-    """
-    ลองหา method จากรายชื่อที่เป็นไปได้ (candidates) ใน obj
-    ถ้าเจอ -> คืนค่า method (callable) กลับไปเลย
-    ถ้าไม่เจอเลย -> log รายชื่อ method จริงทั้งหมดที่ obj มี (ไม่ขึ้นต้นด้วย _)
-                    ออกไปที่ Render logs หนึ่งครั้ง แล้วคืนค่า None
-    """
     for name in candidates:
         m = getattr(obj, name, None)
         if callable(m):
@@ -156,7 +108,6 @@ def _resolve_method(obj, candidates, label=""):
     return None
 
 def _call_flexible(method, *args):
-    """เรียก method โดยลองแบบไม่มี argument ก่อน ถ้า TypeError ค่อยลองใส่ args"""
     try:
         return method()
     except TypeError:
@@ -170,13 +121,8 @@ def get_bkk_date():
     return get_bkk_now().date()
 
 def is_market_hours():
-    """
-    เช็คคร่าวๆ ว่าอยู่ในช่วงเวลาตลาดหุ้นไทยเปิดไหม (จ-ศ, เผื่อ buffer pre-open/หลังปิด)
-    v2.5: หักช่วงพักเที่ยง 12:30-14:30 น. ออกด้วย (ตลาดปิดจริงช่วงนี้ทุกวัน) — เดิมไม่ได้หัก
-    ทำให้บอทคิดว่าเปิดอยู่ทั้งที่ Settrade ปฏิเสธคำสั่งจริงเพราะเป็นช่วงพักเที่ยง
-    """
     now = get_bkk_now()
-    if now.weekday() >= 5:  # 5=เสาร์, 6=อาทิตย์
+    if now.weekday() >= 5:
         return False
     hm = now.hour * 60 + now.minute
     start = MARKET_OPEN_HHMM[0] * 60 + MARKET_OPEN_HHMM[1]
@@ -201,13 +147,6 @@ def init_firebase():
 init_firebase()
 
 def load_watchlist():
-    """
-    อ่าน /watchlist จาก Firebase
-    - ไม่บังคับใส่หุ้น default เข้าไปอีกต่อไป ปล่อยให้ว่างได้จริง เพราะตอนนี้
-      sync_watchlist_with_portfolio() จะเพิ่ม/ลบให้อัตโนมัติตามพอร์ตจริงอยู่แล้ว
-    - ถ้า Firebase อ่านพลาด (error) คืนค่า None แทน {} เพื่อไม่ให้ bot_loop เอาไปเคลียร์
-      watchlist เดิมทิ้งทั้งหมดเพราะ Firebase สะดุดชั่วคราว
-    """
     try:
         data = db.reference("watchlist").get() or {}
         wl = {}
@@ -241,7 +180,6 @@ def remove_watchlist_item(symbol):
         logger.error(f"remove_watchlist_item error: {e}")
         return False
 
-# ---- เทรลลิ่งสต็อป (highest/stop) — persist กัน restart แล้วจุดเทรลลิ่งหาย ----
 def save_trailing(symbol, highest, stop):
     try:
         db.reference(f"trailing/{symbol.upper()}").set({
@@ -253,7 +191,6 @@ def save_trailing(symbol, highest, stop):
         logger.error(f"save_trailing error: {e}")
 
 def load_trailing(symbol):
-    """ โหลดจุดเทรลลิ่งเดิม — แต่ถ้าเป็นข้อมูลจากวันเทรดก่อนหน้า ไม่เอามาใช้ (คนละวันคนละ context) """
     try:
         d = db.reference(f"trailing/{symbol.upper()}").get() or {}
         if str(d.get("date", "")) != str(get_bkk_date()):
@@ -262,6 +199,9 @@ def load_trailing(symbol):
     except Exception as e:
         logger.error(f"load_trailing error: {e}")
         return 0.0, 0.0
+
+def save_trailing_async(symbol, highest, stop):
+    _io_executor.submit(save_trailing, symbol, highest, stop)
 
 # ===================== TELEGRAM =====================
 def send_telegram(message):
@@ -278,17 +218,11 @@ def send_telegram(message):
     except Exception as e:
         logger.error(f"Telegram error: {e}")
 
+def send_telegram_async(message):
+    _io_executor.submit(send_telegram, message)
+
 # ===================== SETTRADE =====================
 def init_settrade():
-    """
-    เชื่อมต่อ Settrade ผ่าน settrade_v2.Investor — รองรับหลายโบรกเกอร์ผ่าน
-    SETTRADE_BROKER_ID (env var) ไม่ผูกกับโบรกใดโบรกหนึ่งในโค้ด เปลี่ยนโบรกเกอร์
-    (เช่น จาก BLS ไปเป็น INVX) แค่เปลี่ยนค่า env vars บน Render:
-      SETTRADE_APP_ID / SETTRADE_APP_SECRET (key ชุดใหม่จากโบรกใหม่)
-      SETTRADE_BROKER_ID (รหัสโบรกใหม่)
-      SETTRADE_ACCOUNT_N (เลขบัญชีที่โบรกใหม่)
-    ไม่ต้องแก้โค้ดส่วนนี้เลย
-    """
     global investor, equity
     app_id = os.getenv("SETTRADE_APP_ID")
     app_secret = os.getenv("SETTRADE_APP_SECRET")
@@ -311,7 +245,6 @@ def init_settrade():
         return False
 
 def refresh_positions(force=False):
-    """ ดึงพอร์ตจาก Settrade ทุก 30 วิ — รู้ว่าถือหุ้นละกี่หุ้น """
     now = time.time()
     if not force and now - state["pos_updated"] < 30:
         return
@@ -329,8 +262,6 @@ def refresh_positions(force=False):
         account_no = os.getenv("SETTRADE_ACCOUNT_N")
         raw = _call_flexible(get_port, account_no)
 
-        # ผลลัพธ์อาจเป็น list ตรงๆ หรือ dict ที่ห่อ list ไว้อีกที
-        # ยืนยันจาก log จริงแล้วว่า settrade_v2 ใช้ camelCase: {'portfolioList': [...], 'totalPortfolio': {...}}
         portfolio_list_key_used = None
         if isinstance(raw, dict):
             for key in ("portfolioList", "portfolio_list", "portfolios", "data", "results"):
@@ -347,7 +278,7 @@ def refresh_positions(force=False):
                 continue
             sym = (item.get("symbol") or item.get("security_symbol") or "").upper()
             if not sym or sym == "_TOTAL":
-                continue  # ข้าม row สรุปรวม (totalPortfolio ใช้ symbol '_TOTAL')
+                continue
             vol = (
                 item.get("amount")
                 or item.get("actualVolume")
@@ -361,8 +292,6 @@ def refresh_positions(force=False):
             if sym:
                 pos[sym] = int(vol or 0)
 
-        # แยกเคส "พอร์ตว่างจริง" (portfolioList เป็น [] จริงๆ) ออกจากเคส
-        # "ได้ raw data มาแต่แปลง field ไม่ได้" — เคสแรกไม่ใช่ปัญหา ไม่ต้อง warn
         if not pos and raw:
             list_is_genuinely_empty = (
                 isinstance(raw, dict) and portfolio_list_key_used is not None and items == []
@@ -377,18 +306,6 @@ def refresh_positions(force=False):
         logger.error(f"get_portfolio error: {e}")
 
 def sync_watchlist_with_portfolio():
-    """
-    ซิงก์ watchlist กับพอร์ตจริงอัตโนมัติ ทุกรอบ bot_loop (~BOT_LOOP_INTERVAL วิ):
-    - ถือหุ้นอยู่ (held > 0) แต่ยังไม่อยู่ใน watchlist → เพิ่มให้อัตโนมัติ (pinned=False)
-      กันเคสถือของอยู่จริงแต่บอทไม่รู้จัก เลยไม่มีการป้องกันเทรลลิ่ง/บิดหายให้
-    - หุ้นที่ไม่ได้กด "เพิ่มหุ้นใหม่" เอง (pinned=False) แล้วขายหมดพอร์ตแล้ว (held<=0)
-      → เอาออกจาก watchlist อัตโนมัติ ไม่ต้องกดลบเอง
-    - หุ้นที่เพิ่มเองผ่านหน้าเว็บ (pinned=True) จะไม่ถูกลบอัตโนมัติ ไว้ทดสอบระบบ/
-      เฝ้าดูก่อนซื้อได้ ต้องกดลบเองเท่านั้น
-    หมายเหตุ: กดลบหุ้นที่ยังถืออยู่จริง (pinned=False) → รอบถัดไปจะถูกเพิ่มกลับอัตโนมัติ
-    เพราะยังมีของอยู่ในพอร์ตจริง เป็นกันชนความปลอดภัย ไม่ใช่บั๊ก (ถ้าอยากหยุดเฝ้าโดยไม่ลบ
-    ให้ใช้ปุ่ม บน/ปิด (active=False) แทน)
-    """
     with lock:
         positions = dict(state["positions"])
         watchlist = dict(state["watchlist"])
@@ -428,18 +345,27 @@ def sync_watchlist_with_portfolio():
     ensure_subscribe([s for s, c in watchlist.items() if c.get("active", True)])
 
 def _record_order(entry):
-    """ บันทึกผลคำสั่งซื้อ/ขายลง state["order_log"] (ล่าสุดอยู่บนสุด, เก็บแค่ ORDER_LOG_MAX รายการ) """
     with lock:
         state["order_log"].insert(0, entry)
         state["order_log"] = state["order_log"][:ORDER_LOG_MAX]
 
-def place_order(side, symbol, volume, pin, price_type="MP-MTL"):
-    """ side='Buy'/'Sell' — MP-MTL เสมอ (กันราคาหลุดไกล) """
+def place_order(side, symbol, volume, pin, price_type="MP-MTL", price=0.0):
+    """
+    side='Buy'/'Sell'
+    price_type="MP-MTL" (ค่าเริ่มต้น) = ราคาตลาด, price ไม่มีผลใดๆ ส่งเป็น 0.0 เสมอ
+    price_type="Limit" = จำกัดราคาเอง ต้องส่ง price เป็นราคาที่ต้องการ (บาท) มาด้วย
+    v2.9: เพิ่ม parameter price จริงๆ (เดิม hardcode 0.0 ทุกครั้งไม่ว่า price_type จะเป็นอะไร
+    ทำให้ "Limit" ไม่เคยทำงานถูกได้เลยแม้โค้ดจะรับ price_type มาเป็นพารามิเตอร์ก็ตาม)
+    """
+    price_type = price_type or "MP-MTL"
+    use_price = float(price) if price_type == "Limit" else 0.0
     entry = {
         "time": get_bkk_now().strftime("%H:%M:%S"),
         "side": side,
         "symbol": symbol.upper().strip(),
         "volume": volume,
+        "price_type": price_type,
+        "price": use_price if price_type == "Limit" else None,
         "ok": None,
         "msg": "",
     }
@@ -455,11 +381,12 @@ def place_order(side, symbol, volume, pin, price_type="MP-MTL"):
             trustee_id_type=os.getenv("SETTRADE_TRUSTEE_ID", "Local"),
             volume=int(volume),
             price_type=price_type,
-            price=0.0,
+            price=use_price,
             validity_type="Day",
             pin=pin,
         )
-        msg = f"📤 {side} {symbol} {volume} ({price_type})\nตอบ: {resp}"
+        price_note = f" @{use_price}" if price_type == "Limit" else ""
+        msg = f"📤 {side} {symbol} {volume}{price_note} ({price_type})\nตอบ: {resp}"
         logger.info(msg)
         send_telegram(msg)
         entry["ok"] = True
@@ -474,7 +401,6 @@ def place_order(side, symbol, volume, pin, price_type="MP-MTL"):
         return {"ok": False, "msg": str(e)}
 
 def _log_late_order_result(side, symbol, volume, future):
-    """ ถูกเรียกทีหลัง เมื่อคำสั่งที่เคย timeout ได้ผลจริงกลับมา (อาจช้ากว่า SELL_ORDER_TIMEOUT มาก) """
     try:
         res = future.result()
         logger.info(f"📬 ผลคำสั่งที่มาช้า: {side} {symbol} {volume} → {res}")
@@ -482,19 +408,9 @@ def _log_late_order_result(side, symbol, volume, future):
     except Exception as e:
         logger.error(f"late order result error: {e}")
 
-def place_order_async(side, symbol, volume, pin, price_type="MP-MTL", timeout=SELL_ORDER_TIMEOUT):
-    """
-    ส่งคำสั่งในเธรดแยก แล้วรอผลไม่เกิน `timeout` วิ เพื่อไม่ให้ loop หลักค้าง
-    ใช้เฉพาะ path ที่ต้องการผลลัพธ์ทันที (เช่น /api/order ที่ผู้ใช้กดปุ่มในหน้าเว็บแล้วรอ
-    alert ตอบกลับ) — ตรรกะ auto-sell ที่ยิงจาก websocket callback ใช้
-    place_order_fire_and_forget() แทน (ดูคอมเมนต์ตรงนั้น) เพราะไม่ควรรอแม้แต่ timeout นี้เลย
-    - ถ้าตอบทันภายในเวลา: คืนผลจริงตามปกติ (place_order บันทึก order_log ให้แล้ว)
-    - ถ้าไม่ตอบทัน: เลิกรอ (ไม่ยกเลิกคำสั่งจริง — Settrade อาจดำเนินการสำเร็จอยู่เบื้องหลัง)
-      แล้วปล่อยให้ loop หลักไปเช็คหุ้นตัวอื่นต่อ ไม่ยิงคำสั่งซ้ำเด็ดขาด
-      ผลจริงที่มาทีหลังจะถูก log + แจ้ง Telegram ผ่าน _log_late_order_result
-      (บันทึกลง order_log แล้วเช่นกัน เพราะเรียก place_order ข้างในอยู่ดี)
-    """
-    future = _order_executor.submit(place_order, side, symbol, volume, pin, price_type)
+def place_order_async(side, symbol, volume, pin, price_type="MP-MTL", price=0.0, timeout=SELL_ORDER_TIMEOUT):
+    """ ใช้ path ที่ต้องการผลลัพธ์ทันที (รอไม่เกิน timeout วิ) — ไม่ได้ใช้ในตรรกะ auto-sell """
+    future = _order_executor.submit(place_order, side, symbol, volume, pin, price_type, price)
     try:
         return future.result(timeout=timeout)
     except concurrent.futures.TimeoutError:
@@ -505,67 +421,16 @@ def place_order_async(side, symbol, volume, pin, price_type="MP-MTL", timeout=SE
         future.add_done_callback(lambda f: _log_late_order_result(side, symbol, volume, f))
         return {"ok": None, "msg": f"timeout {timeout}s — รอผลจริงทีหลัง"}
 
-# ===================== ตรรกะเฝ้าหุ้น (event-driven) =====================
-#
-# v2.3: เดิมตรรกะขายทั้งหมดอยู่ใน check_and_autosell() ที่ bot_loop() เรียกทุก 1 วิ
-# (polling) — ปัญหาคือ websocket (on_bids_offers/on_price_info) ได้ tick ใหม่เข้ามา
-# เร็วกว่านั้น แต่บอทต้องรอ "รอบถัดไป" ของ loop ก่อนถึงจะไปอ่านมันจริง เสียเวลาฟรี
-# สูงสุดเกือบ 1 วิทุกครั้ง
-#
-# ตอนนี้แยกเป็น 2 ชั้น:
-# 1) _global_guards_ok() — เช็คเงื่อนไขที่ใช้ร่วมกันทุกหุ้น (เปิดบอท/connected/
-#    เวลาตลาด/พอร์ต stale) เบาๆ ไม่ต้อง lock นาน
-# 2) _check_symbol_and_maybe_sell(symbol) — ตรรกะขายของหุ้นตัวเดียว (บิดหาย%/
-#    ราคาตก%/trailing) ย้ายมาจาก check_and_autosell() เดิมทั้งหมด แต่ปรับให้รับ
-#    symbol เดียว เรียกได้ทั้งจาก:
-#      - on_bids_offers()/on_price_info() ทันทีที่ websocket ส่ง tick ใหม่มา (เร็วสุด)
-#      - bot_loop() เป็น fallback เผื่อหุ้นไหนไม่มี tick เข้ามาเลยช่วงหนึ่ง (เช็คทุก
-#        BOT_LOOP_INTERVAL วิ กันพลาดเฉยๆ ไม่ใช่ทางหลักแล้ว)
-#
-# critical section (ช่วงที่ถือ lock) ตั้งใจทำให้สั้นที่สุด: อ่าน/เขียน state เร็วๆ
-# แล้วปล่อย lock ก่อนค่อยเรียก place_order_async / send_telegram (I/O ช้า) เพื่อไม่ให้
-# thread ของ websocket ที่วิ่งถี่ๆ ต้องรอ lock นาน
-#
-# v2.8 แก้ (คอขวดความเร็ว 2 จุดที่เจอจากรีวิวโค้ด):
-# 1) save_trailing() (เขียน Firebase) เคยถูกเรียกขณะ "ถือ lock อยู่" ทุกครั้งที่หุ้น
-#    ตัวไหนก็ตามทำจุดสูงสุดใหม่ (เกิดบ่อยมากตอนหุ้นวิ่ง) → หุ้นตัวอื่นทั้งหมดต้องรอคิว
-#    lock เดียวกันจนกว่า Firebase จะตอบ (~50-300ms) ก่อนถึงจะเช็คเงื่อนไขขายของตัวเองได้
-#    ตอนนี้แค่ "จด" ค่าที่ต้องเซฟไว้ในตัวแปรระหว่างถือ lock แล้วค่อยยิงเขียนจริงหลังปล่อย
-#    lock แล้ว ผ่าน _io_executor (fire-and-forget) ไม่ block thread ที่กำลังเช็คหุ้นอื่นเลย
-# 2) place_order_async() เดิมรอผลจริงจาก Settrade API สูงสุด SELL_ORDER_TIMEOUT (2s)
-#    บน thread เดียวกับที่ SDK ใช้ dispatch callback ของหุ้นทุกตัว (ถ้า SDK ใช้ thread
-#    เดียว — สถาปัตยกรรมทั่วไปของ MQTT/WebSocket client) ระหว่างรอผลขายหุ้น A หุ้น B
-#    ที่ร่วงพร้อมกันพอดีจะไม่ถูกประมวลผลเลยจนกว่า A จะเสร็จ — เพิ่ม
-#    place_order_fire_and_forget() ให้ path auto-sell ยิงคำสั่งแล้ว "ปล่อยผ่านทันที"
-#    ไม่รอผลแม้แต่เสี้ยววิ (ผล/log/telegram ของคำสั่งเกิดขึ้นเบื้องหลังทั้งหมด ผ่าน
-#    place_order() ที่บันทึก order_log ให้อยู่แล้วไม่ว่าสำเร็จหรือพลาด) ส่วน
-#    place_order_async() เดิม (รอผลมีจำกัดเวลา) ยังใช้เหมือนเดิมสำหรับปุ่มกดเทรดด่วน
-#    ในหน้าเว็บ (/api/order) ที่ผู้ใช้รออยู่หน้าจอ ต้องการ feedback ทันที
-# 3) เพิ่ม log จับเวลาจริง "tick เข้า → ตัดสินใจ+ส่งคำสั่งเข้าคิว" และ "tick เข้า →
-#    ได้ผลคำสั่งจริงจาก Settrade" (2 บรรทัดแยกกัน อันแรกเร็วมาก อันหลังรวม network
-#    round-trip จริงด้วย) แทนที่จะประมาณจากการอ่านโค้ดเฉยๆ
-
-_io_executor = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="io")
-
-def save_trailing_async(symbol, highest, stop):
-    """ เขียน Firebase แบบ fire-and-forget ไม่ block thread ที่เรียก (ดูคอมเมนต์ v2.8 ข้อ 1) """
-    _io_executor.submit(save_trailing, symbol, highest, stop)
-
-def send_telegram_async(message):
-    """ ส่ง Telegram แบบ fire-and-forget ไม่ block thread ที่เรียก """
-    _io_executor.submit(send_telegram, message)
-
-def place_order_fire_and_forget(side, symbol, volume, pin, price_type="MP-MTL", tick_ts=None):
+def place_order_fire_and_forget(side, symbol, volume, pin, price_type="MP-MTL", price=0.0, tick_ts=None):
     """
-    ใช้เฉพาะ path auto-sell ที่ยิงมาจาก websocket callback — ไม่รอผลเลยแม้แต่เสี้ยววิ
-    (ดูคอมเมนต์ v2.8 ข้อ 2) เพื่อไม่ให้ thread ที่ประมวลผล tick ของหุ้นตัวอื่นต้องรอ
-    ส่งเข้า thread pool เดียวกับ place_order_async แล้วปล่อยผ่านทันที ผล/log/telegram
-    ของตัวคำสั่งเองเกิดขึ้นเบื้องหลังทั้งหมดผ่าน place_order()
-    ถ้ามี tick_ts (เวลาที่ tick ต้นเหตุเข้ามา) จะ log เวลารวมจริงตอนได้ผลคำสั่งด้วย
+    ใช้เฉพาะ path auto-sell ที่ยิงมาจาก websocket callback — ยิง MP-MTL เท่านั้นเสมอ
+    (ไม่มีทางเรียกด้วย price_type="Limit" จากตรรกะ auto-sell เลย เพราะเป็นกลไกความ
+    ปลอดภัยที่ต้องการรับประกันว่าขายได้ตอนเกิดเหตุฉุกเฉิน ใส่ราคาจำกัดจะขัดจุดประสงค์)
+    ไม่รอผลเลยแม้แต่เสี้ยววิ ผล/log/telegram เกิดขึ้นเบื้องหลังทั้งหมดผ่าน place_order()
     """
     def _run():
         t0 = time.time()
-        result = place_order(side, symbol, volume, pin, price_type)
+        result = place_order(side, symbol, volume, pin, price_type, price)
         t1 = time.time()
         if tick_ts is not None:
             logger.info(
@@ -576,7 +441,6 @@ def place_order_fire_and_forget(side, symbol, volume, pin, price_type="MP-MTL", 
     _order_executor.submit(_run)
 
 def _global_guards_ok():
-    """ เช็คเงื่อนไขร่วมแบบเบาๆ ก่อนเสียเวลาเช็คหุ้นตัวไหนเลย """
     with lock:
         if not state["enabled"] or not state["connected"]:
             return False
@@ -602,11 +466,6 @@ def _global_guards_ok():
     return True
 
 def _check_symbol_and_maybe_sell(symbol, tick_ts=None):
-    """
-    เช็คเงื่อนไขขายของหุ้นตัวเดียว — ยิงเรียกทันทีจาก websocket callback (ดูคอมเมนต์ด้านบน)
-    tick_ts: เวลาที่ tick ต้นเหตุเข้ามาจริง (time.time() จาก on_bids_offers/on_price_info)
-             ใช้ log จับเวลารวมจริง — ถ้าไม่ส่งมา (เช่นเรียกจาก bot_loop fallback) ใช้เวลา ณ ตอนนี้แทน
-    """
     if tick_ts is None:
         tick_ts = time.time()
 
@@ -614,8 +473,8 @@ def _check_symbol_and_maybe_sell(symbol, tick_ts=None):
         return
 
     pin = os.getenv("SETTRADE_PIN")
-    sell_action = None          # เตรียม args ไว้ยิงหลังปล่อย lock: (reason_msg, held)
-    trailing_to_persist = None  # (symbol, highest, stop) — เขียน Firebase หลังปล่อย lock เท่านั้น
+    sell_action = None
+    trailing_to_persist = None
 
     with lock:
         cfg = state["watchlist"].get(symbol)
@@ -628,9 +487,8 @@ def _check_symbol_and_maybe_sell(symbol, tick_ts=None):
         trailing_pct = float(cfg.get("trailing_pct", 1.0))
         held = int(state["positions"].get(symbol, 0) or 0)
         if held <= 0:
-            return  # ไม่ถือหุ้น → ไม่ขาย
+            return
 
-        # --- 1) บิดชั้น 1 หายไป / ราคาบิดตกเกิน % → ขายหมดพอร์ตทันที
         bids = s.get("bids") or []
         if bids:
             bid1_price, bid1_vol = bids[0]
@@ -660,15 +518,14 @@ def _check_symbol_and_maybe_sell(symbol, tick_ts=None):
                        f"→ ขาย {held} หุ้น (หมดพอร์ต) ทันที!")
                 logger.warning(msg)
                 s["last_action"] = msg
-                s["prev_bid1_vol"] = 0    # ป้องกันขายซ้ำ
+                s["prev_bid1_vol"] = 0
                 s["prev_bid1_price"] = 0
-                state["positions"][symbol] = 0  # ตัดจำนวนหุ้นในความจำเป็น 0 ทันที กันขายซ้ำ
+                state["positions"][symbol] = 0
                 sell_action = (msg, held)
             else:
                 s["prev_bid1_vol"] = bid1_vol
                 s["prev_bid1_price"] = bid1_price
 
-        # --- 2) Trailing % (เช็คต่อแม้ข้อ 1 ไม่เข้าเงื่อนไข ยกเว้นข้อ 1 ขายไปแล้ว) ---
         if sell_action is None:
             last = s.get("last_price", 0.0)
             if last > 0:
@@ -676,25 +533,25 @@ def _check_symbol_and_maybe_sell(symbol, tick_ts=None):
                 if last > highest:
                     s["highest"] = last
                     s["stop"] = round(last * (1 - trailing_pct / 100.0), 2)
-                    trailing_to_persist = (symbol, s["highest"], s["stop"])  # เขียนหลังปล่อย lock
+                    trailing_to_persist = (symbol, s["highest"], s["stop"])
                 stop = s.get("stop", 0.0)
                 if stop > 0 and last <= stop:
                     msg = (f"🛑 {symbol} ราคา {last} ตกถึงจุดขาย {stop} "
                            f"(สูงสุด {s['highest']} -{trailing_pct}%) → ขาย {held} หุ้น")
                     logger.warning(msg)
                     s["last_action"] = msg
-                    s["stop"] = 0  # ป้องกันขายซ้ำ
-                    trailing_to_persist = (symbol, s["highest"], 0)  # ค่าล่าสุดชนะ (reset stop)
+                    s["stop"] = 0
+                    trailing_to_persist = (symbol, s["highest"], 0)
                     state["positions"][symbol] = 0
                     sell_action = (msg, held)
 
-    # ปล่อย lock แล้วค่อยทำ I/O ทั้งหมด (Firebase, order, telegram) — ไม่มีตัวไหน block
-    # thread นี้เลย ทุกอย่างเป็น fire-and-forget ผ่าน _io_executor/_order_executor
     if trailing_to_persist:
         save_trailing_async(*trailing_to_persist)
 
     if sell_action:
         msg, held = sell_action
+        # auto-sell ยิง MP-MTL เท่านั้นเสมอ (price_type ค่าเริ่มต้น, ไม่ส่ง price) — ดูคอมเมนต์
+        # ที่ place_order_fire_and_forget ด้านบนว่าทำไมถึงตั้งใจไม่เปิดให้เลือกราคาตรงนี้
         place_order_fire_and_forget("Sell", symbol, held, pin, tick_ts=tick_ts)
         t_decide = time.time()
         logger.info(
@@ -704,7 +561,6 @@ def _check_symbol_and_maybe_sell(symbol, tick_ts=None):
         send_telegram_async(msg)
 
 def check_and_autosell_all():
-    """ fallback: ไล่เช็คทุกหุ้นใน watchlist — ใช้ใน bot_loop() เผื่อหุ้นไหนไม่มี tick เข้ามาเลย """
     with lock:
         symbols = list(state["watchlist"].keys())
     for symbol in symbols:
@@ -721,15 +577,6 @@ def normalize_book(data):
     return rows
 
 def on_bids_offers(symbol, msg):
-    """
-    websocket callback — อัปเดต state แล้วเช็คขายทันที (event-driven, ไม่รอ bot_loop)
-    v2.4: log ทุก tick ที่เข้ามาจริง (แยกจาก log ตอน subscribe สำเร็จ) เพื่อเช็คง่ายๆ
-    ว่า subscribe ติดแล้วมีข้อมูลไหลเข้าจริงไหม
-    v2.6: ปิด log นี้เป็นค่าเริ่มต้น (TICK_LOG_ENABLED=0) กันหน่วงเวลาตัดสินใจขายเวลา
-    ตลาด tick ถี่ๆ — เปิดชั่วคราวตอนดีบักผ่าน env var เท่านั้น ไม่ใช่ทางหลักที่ใช้ตอนเทรดจริง
-    v2.8: จับเวลา tick_ts ตั้งแต่บรรทัดแรกสุดของ callback (ก่อนแม้แต่ lock/log) ให้ใกล้
-    เวลาที่ SDK เรียก callback จริงที่สุด ส่งต่อให้ _check_symbol_and_maybe_sell ไว้จับเวลารวม
-    """
     tick_ts = time.time()
     try:
         if TICK_LOG_ENABLED:
@@ -743,12 +590,6 @@ def on_bids_offers(symbol, msg):
         logger.error(f"on_bids_offers error: {e}")
 
 def on_price_info(symbol, msg):
-    """
-    websocket callback — อัปเดต state แล้วเช็คขายทันที (event-driven, ไม่รอ bot_loop)
-    v2.4: log ทุก tick ที่เข้ามาจริง เหตุผลเดียวกับ on_bids_offers ด้านบน
-    v2.6: ปิด log นี้เป็นค่าเริ่มต้นเช่นกัน (ดูคอมเมนต์ใน on_bids_offers)
-    v2.8: จับเวลา tick_ts ตั้งแต่บรรทัดแรกสุด เหมือน on_bids_offers
-    """
     tick_ts = time.time()
     try:
         if TICK_LOG_ENABLED:
@@ -761,7 +602,6 @@ def on_price_info(symbol, msg):
         logger.error(f"on_price_info error: {e}")
 
 def ensure_subscribe(symbols):
-    """ สมัครสตรีมหุ้นใหม่ (ถ้ายังไม่ได้สมัคร) — ลองหลายชื่อ method เพราะ SDK แต่ละเวอร์ชันตั้งชื่อไม่ตรงกัน """
     global realtime
     if investor is None or realtime is None:
         return
@@ -803,13 +643,6 @@ def ensure_subscribe(symbols):
             logger.error(f"subscribe {sym} error: {e}")
 
 def start_realtime():
-    """
-    SDK เวอร์ชันนี้ (settrade_v2) ไม่มี method run()/start()/connect() แบบ blocking —
-    ยืนยันจาก log จริงว่า RealtimeDataConnection มีแค่ subscribe_bid_offer,
-    subscribe_price_info, subscribe_candlestick ฯลฯ เท่านั้น ไม่มีตัวไหนไว้ block รอ event
-    แปลว่าแต่ละ subscribe_* เปิด connection/thread เบื้องหลังให้เองตอนเรียกแล้ว
-    เราแค่ต้อง keep thread นี้ให้มีชีวิตอยู่เฉยๆ กัน object โดน garbage collect
-    """
     global realtime
     try:
         realtime = investor.RealtimeDataConnection()
@@ -824,31 +657,18 @@ def start_realtime():
 # ===================== รีเซ็ตข้ามวันเทรด =====================
 def new_trading_day_reset():
     """
-    เรียกเมื่อพบว่าเข้าสู่วันเทรดใหม่ (เทียบเวลาไทย)
-    - ล้าง prev_bid1_vol ของทุกหุ้น เพื่อไม่ให้เอาวอลุ่มบิดของเมื่อคืนมาเทียบกับเช้านี้
-      (ไม่งั้นช่วงเปิดตลาด/ATO วอลุ่มมักน้อยกว่าตอนปิดเมื่อวานมาก จะเข้าเงื่อนไข
-      "บิดหายเกิน%" ทั้งที่ไม่มีอะไรผิดปกติ แล้วขายหมดพอร์ตไปเอง)
-    - ล้าง subscribed เพื่อบังคับ subscribe ใหม่ทุกตัว เผื่อ realtime connection
-      หลุดไปเมื่อคืน (gateway ปิดต่อคืน) จะได้ไม่ค้างว่า "subscribe แล้ว" ทั้งที่หลุดจริง
-    - highest/stop ของ trailing stop *ไม่* ล้างทิ้งทันที แต่จะโหลดใหม่จาก Firebase
-      ผ่าน load_trailing() ตอนสร้าง entry ใหม่ ซึ่งจะทิ้งค่าที่เป็นของวันเก่าอัตโนมัติ
-      (เช็คจาก field "date" ใน load_trailing)
+    v2.9: แก้ regression — เวอร์ชันก่อนหน้าลืมล้าง prev_bid1_price (ล้างแต่ prev_bid1_vol)
+    ทำให้เสี่ยงเจอบั๊กเดียวกับตอนบิดหายข้ามคืน แต่ผ่านทางราคาแทนวอลุ่ม (เคยแก้ไปรอบก่อน
+    แล้วแต่หายไปจากเวอร์ชันนี้ น่าจะตกหล่นตอนรวมโค้ดหลายรอบ) แก้กลับให้ล้างทั้งคู่
     """
     with lock:
         for sym, s in state["symbols"].items():
             s["prev_bid1_vol"] = 0
+            s["prev_bid1_price"] = 0
         subscribed.clear()
-    logger.info("📅 เข้าสู่วันเทรดใหม่ → รีเซ็ต baseline บิดหาย% และบังคับ subscribe ใหม่")
+    logger.info("📅 เข้าสู่วันเทรดใหม่ → รีเซ็ต baseline บิดหาย%/ราคาตก% และบังคับ subscribe ใหม่")
 
 def bot_loop():
-    """
-    v2.3: ตรรกะเช็คขายหลักย้ายไปยิงตรงจาก websocket callback แล้ว (event-driven,
-    ดูคอมเมนต์เหนือ _check_symbol_and_maybe_sell) loop นี้เหลือแค่งานพื้นหลังที่ไม่ต้องไวมาก
-    (sync watchlist กับพอร์ต, refresh positions ทุก 30 วิ, reset วันใหม่) บวก
-    check_and_autosell_all() เป็น fallback เผื่อหุ้นไหนไม่มี tick เข้ามาเลยช่วงหนึ่ง
-    ลดความถี่จาก 1 วิ เป็น BOT_LOOP_INTERVAL วิ เพื่อลด lock contention กับ thread
-    ของ websocket ที่วิ่งถี่กว่ามาก
-    """
     global _last_trading_date
     while True:
         try:
@@ -861,7 +681,6 @@ def bot_loop():
             if wl is not None:
                 with lock:
                     state["watchlist"] = wl
-                    # หุ้นใหม่ในวอตช์ลิสต์ → โหลดจุดเทรลลิ่งเดิม (ของวันนี้เท่านั้น) กลับมา
                     for sym in wl:
                         if sym not in state["symbols"]:
                             h, st = load_trailing(sym)
@@ -871,8 +690,8 @@ def bot_loop():
                 active_syms = [s for s, c in state["watchlist"].items() if c.get("active", True)]
             ensure_subscribe(active_syms)
             refresh_positions()
-            sync_watchlist_with_portfolio()  # เพิ่ม/ลบ watchlist อัตโนมัติตามพอร์ตจริง
-            check_and_autosell_all()         # fallback กันพลาด เผื่อหุ้นไหนไม่มี tick เข้ามา
+            sync_watchlist_with_portfolio()
+            check_and_autosell_all()
         except Exception as e:
             logger.error(f"Bot Loop Error: {e}")
         time.sleep(BOT_LOOP_INTERVAL)
@@ -910,7 +729,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                         "last_action": sd.get("last_action", "รอข้อมูล..."),
                     },
                     "watchlist": state["watchlist"],
-                    "positions": state["positions"],  # ดิบๆ จาก get_portfolios() ตรงๆ
+                    "positions": state["positions"],
                     "order_log": state["order_log"],
                 }
             self.send_json(payload)
@@ -949,11 +768,26 @@ class DashboardHandler(BaseHTTPRequestHandler):
             symbol = data.get("symbol", "TTB")
             volume = data.get("volume", 100)
             pin = data.get("pin", "")
+            price_type = data.get("price_type", "MP-MTL")
+            price_raw = data.get("price", 0)
             if not pin:
                 self.send_json({"ok": False, "msg": "ต้องกรอก PIN"})
                 return
-            # v2.5: เช็คก่อนยิงจริง — ถ้าเป็นช่วงพักเที่ยง/นอกเวลาตลาด แจ้งข้อความที่เข้าใจง่าย
-            # แทนที่จะรอ error ดิบจาก Settrade gateway (SEOSGW-01) อย่างเดียว
+
+            # v2.9: ถ้าเลือก Limit ต้องมีราคาที่ใช้ได้จริงมาด้วยเสมอ กันเผลอส่งราคา 0/ว่าง
+            # ไปที่ Settrade (บาง gateway อาจตีความ 0 เป็นอย่างอื่นไม่คาดคิด)
+            if price_type == "Limit":
+                try:
+                    price = float(price_raw)
+                except (TypeError, ValueError):
+                    price = 0.0
+                if price <= 0:
+                    self.send_json({"ok": False, "msg": "ระบุราคาที่ต้องการก่อน (ต้องมากกว่า 0)"})
+                    return
+            else:
+                price_type = "MP-MTL"
+                price = 0.0
+
             if not is_market_hours():
                 now = get_bkk_now()
                 hm = now.hour * 60 + now.minute
@@ -969,12 +803,13 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 entry = {
                     "time": now.strftime("%H:%M:%S"), "side": side,
                     "symbol": symbol.upper().strip(), "volume": volume,
+                    "price_type": price_type, "price": price if price_type == "Limit" else None,
                     "ok": False, "msg": msg,
                 }
                 _record_order(entry)
                 self.send_json({"ok": False, "msg": msg})
                 return
-            self.send_json(place_order(side, symbol, volume, pin))  # MP-MTL
+            self.send_json(place_order(side, symbol, volume, pin, price_type=price_type, price=price))
             return
 
         if path == "/api/watchlist/add":
@@ -987,7 +822,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 "trailing_pct": float(data.get("trailing_pct", 1.0)),
                 "price_drop_pct": float(data.get("price_drop_pct", 1.0)),
                 "active": True,
-                "pinned": True,  # เพิ่มเองผ่านหน้าเว็บ = pin ไว้ ไม่โดนลบอัตโนมัติตอนพอร์ตว่าง (ไว้ทดสอบ)
+                "pinned": True,
             }
             ok = save_watchlist_item(sym, cfg)
             if ok:
@@ -1009,7 +844,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 "trailing_pct": float(data.get("trailing_pct", 1.0)),
                 "price_drop_pct": float(data.get("price_drop_pct", 1.0)),
                 "active": bool(data.get("active", True)),
-                "pinned": bool(existing.get("pinned", False)),  # แก้ผ่านหน้าเว็บไม่ได้ กันเผลอ pin/unpin
+                "pinned": bool(existing.get("pinned", False)),
             }
             ok = save_watchlist_item(sym, cfg)
             if ok:
@@ -1023,9 +858,6 @@ class DashboardHandler(BaseHTTPRequestHandler):
             with lock:
                 existed_in_state = sym in state["watchlist"]
             ok = remove_watchlist_item(sym)
-            # v2.7: log ทุกครั้งที่มีการขอลบ พร้อมผลลัพธ์ชัดๆ — ช่วยแยกได้ว่า request
-            # ไปถึง server จริงไหม (ถ้าไม่มี log นี้เลย = ปัญหาอยู่ฝั่ง client/เบราว์เซอร์)
-            # ลบสำเร็จที่ Firebase ไหม (ok) และตอนขอลบ มันอยู่ใน state อยู่แล้วไหม
             logger.info(f"🗑 ขอลบ {sym} ออกจาก watchlist (มีอยู่ใน state ก่อนลบ={existed_in_state}) → firebase_delete_ok={ok}")
             if ok:
                 with lock:
@@ -1107,10 +939,23 @@ HTML = """<!DOCTYPE html>
 
   <!-- โซน 3: เทรดด่วน -->
   <div class="card">
-    <div style="font-weight:bold;margin-bottom:8px;">⚡ เทรดด่วน (MP-MTL)</div>
+    <div style="font-weight:bold;margin-bottom:8px;">⚡ เทรดด่วน</div>
     <div class="row">
       <div class="grow"><label>หุ้น</label><input id="tradeSymbol" value="TTB"></div>
       <div class="grow"><label>จำนวน</label><input id="tradeVol" type="number" value="100" inputmode="numeric"></div>
+    </div>
+    <div class="row" style="margin-top:8px;">
+      <div class="grow">
+        <label>ประเภทคำสั่ง</label>
+        <select id="tradePriceType" onchange="togglePriceField()">
+          <option value="MP-MTL">ราคาตลาด (MP-MTL)</option>
+          <option value="Limit">จำกัดราคา (Limit)</option>
+        </select>
+      </div>
+      <div class="grow" id="tradePriceWrap" style="display:none;">
+        <label>ราคาที่ต้องการ (บาท)</label>
+        <input id="tradePrice" type="number" step="0.01" inputmode="decimal" placeholder="เช่น 12.50">
+      </div>
     </div>
     <label>PIN</label>
     <input id="tradePin" type="password" inputmode="numeric">
@@ -1135,7 +980,7 @@ HTML = """<!DOCTYPE html>
   <!-- โซน 4: Watchlist -->
   <div class="card">
     <div style="font-weight:bold;margin-bottom:8px;">📋 รายการเฝ้า (Watchlist)</div>
-    <div style="font-size:11px;color:#64748b;margin-bottom:4px;">บิดหาย% หรือ ราคาตก% (แล้วแต่อันไหนถึงก่อน) → ขายหมดพอร์ตทันที</div>
+    <div style="font-size:11px;color:#64748b;margin-bottom:4px;">บิดหาย% หรือ ราคาตก% (แล้วแต่อันไหนถึงก่อน) → ขายหมดพอร์ตทันที ด้วย MP-MTL เสมอ (ไม่ใช้ราคาจำกัด กันขายไม่ออก)</div>
     <div style="font-size:11px;color:#64748b;margin-bottom:6px;">🔒 = หุ้นที่ถืออยู่จริง ระบบเพิ่มให้อัตโนมัติ ลบแล้วจะเพิ่มกลับถ้ายังถือของอยู่ (ขายหมดจะหายเอง) — ถ้าอยากหยุดเฝ้าโดยไม่ลบ ใช้ปุ่ม 🟢/⚪ แทน ส่วนหุ้นที่กด + เพิ่มเอง ลบได้อิสระ ไว้ทดสอบ</div>
     <div id="wlBody"></div>
     <div style="border-top:1px solid #263449;margin:10px 0;"></div>
@@ -1162,10 +1007,11 @@ HTML = """<!DOCTYPE html>
 
 <script>
 let pending=null;
-let modalConfirmFn=null;   // ฟังก์ชันที่จะเรียกตอนกด "ยืนยัน" ใน modal — ใช้ modal เดียวกันทั้งซื้อขาย/ลบ
+let modalConfirmFn=null;
 let pendingRemoveSym=null;
-let userTypingSymbol=false; // true ระหว่างที่ผู้ใช้กำลังโฟกัส/พิมพ์ช่องหุ้นเทรดด่วนเอง
-let wlFocusedId=null;       // id ของ input ในตาราง watchlist ที่กำลังโฟกัสอยู่ (ถ้ามี)
+let userTypingSymbol=false;
+let wlFocusedId=null;
+let lastDisplayedPrice=0;   // v2.9: ราคาล่าสุดที่จอแสดง ไว้ auto-fill ช่อง Limit
 const fmt=n=>n==null||n===0?'--':Number(n).toLocaleString('en-US');
 
 document.addEventListener('DOMContentLoaded', ()=>{
@@ -1174,9 +1020,6 @@ document.addEventListener('DOMContentLoaded', ()=>{
   el.addEventListener('blur', ()=>{ userTypingSymbol=false; });
 });
 
-// กันบั๊ก: polling ทุก 1 วิ เคย rebuild ตาราง watchlist ทับช่องที่กำลังพิมพ์อยู่จนพิมพ์
-// ไม่ติด — ใช้ focusin/focusout แบบ event delegation เพราะแถวในตารางนี้เพิ่ม/หายเองได้
-// จากการ sync พอร์ตอัตโนมัติ (ผูก listener ตรงๆ กับแต่ละ input ไม่พอ)
 document.addEventListener('focusin', e=>{
   if(e.target && e.target.closest && e.target.closest('#wlBody')) wlFocusedId = e.target.id;
 });
@@ -1184,10 +1027,18 @@ document.addEventListener('focusout', e=>{
   if(e.target && e.target.id === wlFocusedId) wlFocusedId = null;
 });
 
+function togglePriceField(){
+  const isLimit = document.getElementById('tradePriceType').value === 'Limit';
+  document.getElementById('tradePriceWrap').style.display = isLimit ? '' : 'none';
+  if(isLimit){
+    const priceInput = document.getElementById('tradePrice');
+    if(!priceInput.value && lastDisplayedPrice) priceInput.value = lastDisplayedPrice;
+  }
+}
+
 async function refresh(){
   try{
     const s = await (await fetch('/api/state')).json();
-    // badges
     const sb=document.getElementById('statusBadge');
     sb.className='badge '+(s.enabled?'on':'off');
     sb.textContent=s.enabled?'🟢 บอททำงาน':'⏸ บอทหยุด';
@@ -1195,23 +1046,19 @@ async function refresh(){
     cb.className='badge '+(s.connected?'on':'off');
     cb.textContent=s.connected?'🔌 เชื่อมต่อ':'🔌 ยังไม่ต่อ';
     document.getElementById('toggleBtn').textContent=s.enabled?'⏸ ปิดบอท':'▶ เปิดบอท';
-    // select
     const sel=document.getElementById('selSymbol');
     const keys=Object.keys(s.watchlist||{});
     if(sel.options.length!==keys.length){
       sel.innerHTML=keys.map(k=>`<option value="${k}" ${k===s.selected?'selected':''}>${k}</option>`).join('')||'<option>--</option>';
     }
-    // selected data
     const d=s.selected_data||{};
-    // หมายเหตุ: ไม่ sync ค่า tradeSymbol จาก polling ที่นี่แล้ว (เดิม overwrite ทับที่ผู้ใช้พิมพ์เอง
-    // ทุก 1 วิ ทำให้พิมพ์หุ้นอื่นไม่ติด) — sync แค่ตอนเลือกจาก dropdown ใน selectSymbol() แทน
+    lastDisplayedPrice = d.last_price || 0;
     document.getElementById('priceTxt').textContent=d.last_price?fmt(d.last_price):'--';
     document.getElementById('posTxt').textContent=(s.positions&&s.positions[s.selected])||0;
     document.getElementById('highestTxt').textContent=d.highest?fmt(d.highest):'--';
     document.getElementById('stopTxt').textContent=d.stop?fmt(d.stop):'--';
     document.getElementById('dropTxt').textContent=(d.drop||0)+'%';
     document.getElementById('actionLog').textContent=d.last_action||'รอข้อมูล...';
-    // order book
     const tbody=document.getElementById('bookBody');
     let html='';
     const bids=d.bids||[], offers=d.offers||[];
@@ -1222,7 +1069,6 @@ async function refresh(){
     }
     tbody.innerHTML=html||'<tr><td colspan="5" style="color:#64748b;">รอข้อมูล...</td></tr>';
 
-    // ประวัติคำสั่งซื้อขาย
     const olb=document.getElementById('orderLogBody');
     const orders=s.order_log||[];
     if(orders.length===0){
@@ -1232,18 +1078,17 @@ async function refresh(){
         const cls=o.ok===true?'ok-yes':(o.ok===false?'ok-no':'ok-pending');
         const icon=o.ok===true?'✅':(o.ok===false?'❌':'⏳');
         const sideTh=o.side==='Buy'?'ซื้อ':'ขาย';
-        return `<div class="order-row"><span>${o.time} ${icon} ${sideTh} ${o.symbol} ${o.volume}</span><span class="${cls}" style="text-align:right;max-width:55%;overflow-wrap:anywhere;">${(o.msg||'').slice(0,80)}</span></div>`;
+        const priceTxt = (o.price_type==='Limit' && o.price) ? ` @${o.price}` : '';
+        return `<div class="order-row"><span>${o.time} ${icon} ${sideTh} ${o.symbol} ${o.volume}${priceTxt}</span><span class="${cls}" style="text-align:right;max-width:55%;overflow-wrap:anywhere;">${(o.msg||'').slice(0,80)}</span></div>`;
       }).join('');
     }
 
-    // พอร์ตปัจจุบัน (ดิบๆ จาก positions ตรงๆ ไม่ผ่านการกรองของ watchlist)
     const pb=document.getElementById('portBody');
     const pk=Object.keys(s.positions||{});
     pb.innerHTML = pk.length
       ? pk.map(k=>`<div>${k}: <span class="yellow mono">${s.positions[k]}</span> หุ้น</div>`).join('')
       : '<div>ไม่มีหุ้นในพอร์ต</div>';
 
-    // watchlist rows — ข้ามการ rebuild ทั้งบล็อกนี้ถ้ากำลังโฟกัส/พิมพ์ช่องไหนอยู่ในตารางนี้
     if(!wlFocusedId){
       const wl=document.getElementById('wlBody');
       if(keys.length===0){
@@ -1273,7 +1118,6 @@ async function refresh(){
 async function toggleBot(){ await fetch('/api/toggle',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}); }
 async function selectSymbol(){
   const sym = document.getElementById('selSymbol').value;
-  // sync ช่องหุ้นเทรดด่วนตรงนี้แทน — เกิดขึ้นแค่ตอนผู้ใช้ตั้งใจเปลี่ยนหุ้นดูจอเอง
   document.getElementById('tradeSymbol').value = sym;
   await fetch('/api/select',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({symbol:sym})});
 }
@@ -1281,11 +1125,15 @@ function askOrder(side){
   const symbol=document.getElementById('tradeSymbol').value.trim().toUpperCase();
   const vol=document.getElementById('tradeVol').value;
   const pin=document.getElementById('tradePin').value;
+  const priceType=document.getElementById('tradePriceType').value;
+  const priceVal=document.getElementById('tradePrice').value;
   if(!pin){ alert('กรอก PIN ก่อน'); return; }
-  pending={side,symbol,volume:vol,pin};
+  if(priceType==='Limit' && (!priceVal || Number(priceVal)<=0)){ alert('ระบุราคาที่ต้องการก่อน'); return; }
+  pending={side,symbol,volume:vol,pin,price_type:priceType,price:priceType==='Limit'?priceVal:0};
   modalConfirmFn=doOrder;
+  const priceTxt = priceType==='Limit' ? (' ที่ราคา '+priceVal+' บาท') : ' (ราคาตลาด MP-MTL)';
   document.getElementById('modalTitle').textContent=(side==='Buy'?'🟢 ซื้อ':'🔴 ขาย')+' '+symbol+' '+vol+' หุ้น';
-  document.getElementById('modalBody').textContent='ราคาตลาด (MP-MTL) — ยืนยัน?';
+  document.getElementById('modalBody').textContent='ยืนยันคำสั่ง'+priceTxt+' ?';
   document.getElementById('modalOk').className='btn-'+(side==='Buy'?'buy':'sell')+' grow';
   document.getElementById('modalBg').style.display='flex';
 }
@@ -1296,7 +1144,7 @@ async function doOrder(){
   const res=await r.json();
   alert(res.ok?'✅ ส่งแล้ว: '+res.msg:'❌ '+res.msg);
   closeModal();
-  refresh(); // อัปเดตประวัติคำสั่งทันทีไม่ต้องรอ interval
+  refresh();
 }
 async function addSymbol(){
   const symbol=document.getElementById('newSym').value.trim().toUpperCase();
@@ -1318,8 +1166,6 @@ async function toggleActive(sym){
   })});
 }
 function askRemove(sym){
-  // v2.7: ใช้ modal ในหน้าเว็บแทน native confirm() — บาง webview/เบราว์เซอร์บล็อก confirm()
-  // แบบเงียบๆ (คืนค่า false ทันทีไม่มี popup ให้เห็นเลย) ทำให้กดลบแล้วดูเหมือนไม่มีอะไรเกิดขึ้น
   pendingRemoveSym=sym;
   modalConfirmFn=doRemove;
   document.getElementById('modalTitle').textContent='🗑 ลบ '+sym;
@@ -1335,7 +1181,7 @@ async function doRemove(){
     const res=await r.json();
     closeModal();
     if(!res.ok){ alert('❌ ลบไม่สำเร็จ: '+(res.msg||'ไม่ทราบสาเหตุ')); return; }
-    refresh(); // อัปเดตตารางทันทีไม่ต้องรอ interval — ถ้าโผล่กลับมาใหม่ = auto-sync เพิ่มกลับเพราะยังถือหุ้นอยู่จริง
+    refresh();
   }catch(e){
     closeModal();
     alert('❌ ส่งคำขอลบไม่สำเร็จ (เน็ตหลุด/เซิร์ฟเวอร์ไม่ตอบ): '+e);
@@ -1363,7 +1209,10 @@ def main():
         threading.Thread(target=start_realtime, daemon=True).start()
     threading.Thread(target=bot_loop, daemon=True).start()
     port = int(os.getenv("PORT", 10000))
-    server = HTTPServer(("0.0.0.0", port), DashboardHandler)
+    # v2.9: กลับมาใช้ ThreadingHTTPServer (เจอว่าเวอร์ชันที่อัปโหลดมาใช้ HTTPServer ธรรมดา
+    # ซึ่งจัดการทีละ 1 request — ถ้าสั่งซื้อ/ขายมือแล้ว Settrade ตอบช้า จะบล็อกทุก
+    # request อื่นด้วย รวมถึง /api/state ที่หน้าเว็บ poll ทุกวินาที ทำให้แดชบอร์ดค้างทั้งหน้า)
+    server = ThreadingHTTPServer(("0.0.0.0", port), DashboardHandler)
     logger.info(f"🌐 Dashboard: http://0.0.0.0:{port}")
     server.serve_forever()
 
