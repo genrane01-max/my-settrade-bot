@@ -1071,13 +1071,15 @@ HTML = """<!DOCTYPE html>
       <div id="modalBody" style="font-size:14px;color:#cbd5e1;margin-bottom:14px;"></div>
       <div class="row">
         <button class="btn-ghost grow" onclick="closeModal()">ยกเลิก</button>
-        <button id="modalOk" class="btn-sell grow" onclick="doOrder()">ยืนยัน</button>
+        <button id="modalOk" class="btn-sell grow" onclick="modalConfirmFn && modalConfirmFn()">ยืนยัน</button>
       </div>
     </div>
   </div>
 
 <script>
 let pending=null;
+let modalConfirmFn=null;   // ฟังก์ชันที่จะเรียกตอนกด "ยืนยัน" ใน modal — ใช้ modal เดียวกันทั้งซื้อขาย/ลบ
+let pendingRemoveSym=null;
 let userTypingSymbol=false; // true ระหว่างที่ผู้ใช้กำลังโฟกัส/พิมพ์ช่องหุ้นเทรดด่วนเอง
 let wlFocusedId=null;       // id ของ input ในตาราง watchlist ที่กำลังโฟกัสอยู่ (ถ้ามี)
 const fmt=n=>n==null||n===0?'--':Number(n).toLocaleString('en-US');
@@ -1175,7 +1177,7 @@ async function refresh(){
             <td><input id="p_${k}" type="number" step="0.1" value="${c.price_drop_pct!=null?c.price_drop_pct:1.0}" onchange="updateRow('${k}')"></td>
             <td><input id="t_${k}" type="number" step="0.1" value="${c.trailing_pct}" onchange="updateRow('${k}')"></td>
             <td><button class="${c.active?'btn-buy':'btn-ghost'}" onclick="toggleActive('${k}')">${c.active?'🟢':'⚪'}</button></td>
-            <td><button class="btn-danger" onclick="removeSym('${k}')">🗑</button></td>
+            <td><button class="btn-danger" onclick="askRemove('${k}')">🗑</button></td>
           </tr>`;
         }
         whtml+='</table>';
@@ -1197,12 +1199,13 @@ function askOrder(side){
   const pin=document.getElementById('tradePin').value;
   if(!pin){ alert('กรอก PIN ก่อน'); return; }
   pending={side,symbol,volume:vol,pin};
+  modalConfirmFn=doOrder;
   document.getElementById('modalTitle').textContent=(side==='Buy'?'🟢 ซื้อ':'🔴 ขาย')+' '+symbol+' '+vol+' หุ้น';
   document.getElementById('modalBody').textContent='ราคาตลาด (MP-MTL) — ยืนยัน?';
   document.getElementById('modalOk').className='btn-'+(side==='Buy'?'buy':'sell')+' grow';
   document.getElementById('modalBg').style.display='flex';
 }
-function closeModal(){ pending=null; document.getElementById('modalBg').style.display='none'; }
+function closeModal(){ pending=null; pendingRemoveSym=null; modalConfirmFn=null; document.getElementById('modalBg').style.display='none'; }
 async function doOrder(){
   if(!pending) return;
   const r=await fetch('/api/order',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(pending)});
@@ -1230,14 +1233,27 @@ async function toggleActive(sym){
     symbol:sym,bid_drop_pct:c.bid_drop_pct,price_drop_pct:c.price_drop_pct,trailing_pct:c.trailing_pct,active:!c.active
   })});
 }
-async function removeSym(sym){
-  if(!confirm('ลบ '+sym+' ออกจากรายการเฝ้า?')) return;
+function askRemove(sym){
+  // v2.7: ใช้ modal ในหน้าเว็บแทน native confirm() — บาง webview/เบราว์เซอร์บล็อก confirm()
+  // แบบเงียบๆ (คืนค่า false ทันทีไม่มี popup ให้เห็นเลย) ทำให้กดลบแล้วดูเหมือนไม่มีอะไรเกิดขึ้น
+  pendingRemoveSym=sym;
+  modalConfirmFn=doRemove;
+  document.getElementById('modalTitle').textContent='🗑 ลบ '+sym;
+  document.getElementById('modalBody').textContent='ลบ '+sym+' ออกจากรายการเฝ้า — ยืนยัน?';
+  document.getElementById('modalOk').className='btn-sell grow';
+  document.getElementById('modalBg').style.display='flex';
+}
+async function doRemove(){
+  const sym=pendingRemoveSym;
+  if(!sym) return;
   try{
     const r=await fetch('/api/watchlist/remove',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({symbol:sym})});
     const res=await r.json();
+    closeModal();
     if(!res.ok){ alert('❌ ลบไม่สำเร็จ: '+(res.msg||'ไม่ทราบสาเหตุ')); return; }
     refresh(); // อัปเดตตารางทันทีไม่ต้องรอ interval — ถ้าโผล่กลับมาใหม่ = auto-sync เพิ่มกลับเพราะยังถือหุ้นอยู่จริง
   }catch(e){
+    closeModal();
     alert('❌ ส่งคำขอลบไม่สำเร็จ (เน็ตหลุด/เซิร์ฟเวอร์ไม่ตอบ): '+e);
   }
 }
