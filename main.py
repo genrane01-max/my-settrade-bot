@@ -306,7 +306,7 @@ def refresh_positions(force=False):
             return
 
         account_no = os.getenv("SETTRADE_ACCOUNT_N")
-        raw = _call_flexible(get_port, account_no)
+        raw = api_call_with_retry(query_bucket, _call_flexible, get_port, account_no)
 
         portfolio_list_key_used = None
         if isinstance(raw, dict):
@@ -338,6 +338,7 @@ def refresh_positions(force=False):
             )
             if sym:
                 pos[sym] = int(vol or 0)
+
             cost = (
                 item.get("averagePrice")
                 if item.get("averagePrice") not in (None, 0)
