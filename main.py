@@ -115,8 +115,10 @@ def _call_flexible(method, *args):
         return method(*args)
 
 # ===================== เวลา / วันเทรด (Asia/Bangkok, UTC+7) =====================
+from datetime import datetime, timezone, timedelta
+
 def get_bkk_now():
-    return datetime.datetime.utcnow() + datetime.timedelta(hours=7)
+    return datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(hours=7)
 
 def get_bkk_date():
     return get_bkk_now().date()
