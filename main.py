@@ -36,6 +36,49 @@ import firebase_admin
 from firebase_admin import credentials, db
 from settrade_v2 import Investor
 
+# ===================== RATE LIMITER (SETTRADE API) =====================
+class TokenBucket:
+    def __init__(self, rate, capacity):
+        self.rate = rate
+        self.capacity = capacity
+        self.tokens = capacity
+        self.last_fill = time.monotonic()
+        self.lock = threading.Lock()
+
+    def acquire(self, tokens=1):
+        while True:
+            with self.lock:
+                now = time.monotonic()
+                elapsed = now - self.last_fill
+                self.tokens = min(self.capacity, self.tokens + elapsed * self.rate)
+                self.last_fill = now
+                if self.tokens >= tokens:
+                    self.tokens -= tokens
+                    return
+                wait_time = (tokens - self.tokens) / self.rate
+            time.sleep(wait_time)  # sleep นอก lock
+
+Q_RATE = float(os.getenv("SETTRADE_QUERY_RATE", "4.0"))
+O_RATE = float(os.getenv("SETTRADE_ORDER_RATE", "1.0"))
+query_bucket = TokenBucket(rate=Q_RATE, capacity=5)
+order_bucket = TokenBucket(rate=O_RATE, capacity=5)
+
+def api_call_with_retry(bucket, func, *args, **kwargs):
+    max_retries = 3
+    backoff = 1.0
+    for attempt in range(max_retries):
+        bucket.acquire()
+        try:
+            return func(*args, **kwargs)
+        except Exception as e:
+            err = str(e).lower()
+            if "429" in err or "rate" in err or "too many" in err:
+                if attempt < max_retries - 1:
+                    time.sleep(backoff)
+                    backoff *= 2
+                    continue
+            raise
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
