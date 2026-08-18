@@ -687,8 +687,8 @@ def _cancel_order_manual_test(order_no, pin, symbol=""):
         }
 
     attempts = [
-        ("cancel_order(order_no=order_no, pin=pin)  [ตามเอกสาร SDK]", lambda: cancel_fn(order_no=order_no, pin=pin)),
-        ("cancel_order(order_no, pin)  [positional สำรอง]", lambda: cancel_fn(order_no, pin)),
+        ("cancel_order(order_no=order_no, pin=pin) [ตามเอกสาร SDK]", lambda: api_call_with_retry(order_bucket, cancel_fn, order_no=order_no, pin=pin)),
+        ("cancel_order(order_no, pin) [positional สำรอง]", lambda: api_call_with_retry(order_bucket, cancel_fn, order_no, pin)),
     ]
 
     tried = []
