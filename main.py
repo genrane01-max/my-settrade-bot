@@ -19,6 +19,9 @@
 #   ALGO ที่จะประมวลผลจริง) ถ้า retry แล้วยัง "Invalid Order state" อยู่ดีทุกครั้งใน SANDBOX
 #   อาจเป็นข้อจำกัดของ SANDBOX เองที่ทดสอบเรื่องนี้ให้จบไม่ได้ ต้องทดสอบกับ ALGO จริง
 #   (จำนวนหุ้นน้อยๆ) ถึงจะฟันธงได้ 100% ว่า retry นี้แก้ปัญหาจริงหรือไม่
+#
+# v2.15 — ปรับความไวของ chase-sell (poll/retry ถี่ขึ้น) + แก้ปุ่มเปิดปิด/ลบใน watchlist
+#   ล้นออกนอกการ์ดบนมือถือจอแคบ (ห่อ table ด้วย scroll container แทนการปล่อยล้น)
 # ==============================================================================
 
 import os
@@ -62,7 +65,7 @@ _last_trading_date = None
 
 DEFAULT_CFG = {
     "bid_drop_pct": 60.0, "trailing_pct": 1.0, "price_drop_pct": 1.0,
-    "cost_stop_pct": 5.0,
+    "cost_stop_pct": 1.0,
     "active": True, "pinned": False,
 }
 
@@ -77,12 +80,12 @@ ORDER_LOG_MAX = 20
 TICK_LOG_ENABLED = os.getenv("TICK_LOG_ENABLED", "0") == "1"
 
 CHASE_MAX_ROUNDS = 5
-CHASE_POLL_INTERVAL = 0.3
-CHASE_POLL_TIMEOUT_PER_ROUND = 3.0
+CHASE_POLL_INTERVAL = 0.15
+CHASE_POLL_TIMEOUT_PER_ROUND = 2.0
 
 # v2.14: retry เฉพาะกรณี cancel เจอ "Invalid Order state" — ดูคอมเมนต์หัวไฟล์
 CANCEL_STATE_RETRY_MAX = 2
-CANCEL_STATE_RETRY_DELAY = 0.5  # วิ
+CANCEL_STATE_RETRY_DELAY = 0.25  # วิ
 
 _order_executor = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="order")
 _io_executor = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="io")
@@ -1209,7 +1212,7 @@ HTML = """<!DOCTYPE html>
 <style>
   * { box-sizing:border-box; margin:0; padding:0; }
   body { font-family:-apple-system,'Segoe UI',Roboto,sans-serif; background:#0b1220; color:#e2e8f0; padding:12px; }
-  .card { background:#151e2e; border:1px solid #263449; border-radius:14px; padding:14px; margin-bottom:12px; }
+  .card { background:#151e2e; border:1px solid #263449; border-radius:14px; padding:14px; margin-bottom:12px; overflow:hidden; }
   .row { display:flex; gap:8px; align-items:center; }
   .grow { flex:1; }
   .badge { padding:6px 12px; border-radius:20px; font-weight:bold; font-size:14px; }
@@ -1223,13 +1226,15 @@ HTML = """<!DOCTYPE html>
   .btn-info { background:#0369a1; }
   input, select { width:100%; padding:10px; border-radius:8px; border:1px solid #334155; background:#0b1220; color:#fff; font-size:16px; margin-top:4px; }
   label { font-size:12px; color:#94a3b8; font-weight:600; }
-  table { width:100%; border-collapse:collapse; font-size:13px; }
-  th { color:#94a3b8; font-size:11px; padding:4px; text-align:center; }
-  td { padding:5px; text-align:center; border-top:1px solid #1e293b; }
+  table { border-collapse:collapse; font-size:13px; }
+  th { color:#94a3b8; font-size:11px; padding:4px; text-align:center; white-space:nowrap; }
+  td { padding:5px; text-align:center; border-top:1px solid #1e293b; white-space:nowrap; }
   .mono { font-variant-numeric:tabular-nums; }
   .log { background:#0b1220; border:1px solid #263449; border-radius:8px; padding:8px; font-size:12px; color:#93c5fd; min-height:20px; white-space:pre-wrap; word-break:break-word; }
-  .wl-row input { width:56px; padding:6px; font-size:13px; margin-top:0; }
-  .wl-row button { padding:6px 8px; font-size:12px; width:auto; }
+  .wl-scroll { overflow-x:auto; -webkit-overflow-scrolling:touch; margin:0 -14px; padding:0 14px; }
+  .wl-scroll table { min-width:100%; }
+  .wl-row input { width:50px; padding:6px; font-size:13px; margin-top:0; }
+  .wl-row button { padding:6px 8px; font-size:12px; width:auto; white-space:nowrap; }
   .modal-bg { display:none; position:fixed; inset:0; background:rgba(0,0,0,.7); z-index:50; align-items:center; justify-content:center; }
   .modal { background:#1e293b; border:1px solid #475569; border-radius:14px; padding:20px; max-width:340px; width:92%; }
   .order-row { display:flex; justify-content:space-between; gap:8px; font-size:12px; padding:6px 0; border-top:1px solid #1e293b; align-items:flex-start; }
@@ -1267,7 +1272,7 @@ HTML = """<!DOCTYPE html>
       </div>
     </div>
     <div class="price red mono" id="priceTxt" style="margin:8px 0;">--</div>
-    <table>
+    <table style="width:100%;">
       <tr><th>วอลุ่ม</th><th>บิด</th><th style="width:30px;"></th><th>ออฟเฟอร์</th><th>วอลุ่ม</th></tr>
       <tbody id="bookBody"><tr><td colspan="5" style="color:#64748b;">กำลังโหลด...</td></tr></tbody>
     </table>
@@ -1343,6 +1348,7 @@ HTML = """<!DOCTYPE html>
     <div style="font-size:11px;color:#64748b;margin-bottom:4px;">บิดหาย% หรือ ราคาตก% หรือ ขาดทุนจากต้นทุน% (แล้วแต่อันไหนถึงก่อน) → ไล่ราคาขายหมดพอร์ตด้วย MP-MTL (cancel+ส่งใหม่อัตโนมัติถ้าขายไม่หมดในรอบเดียว)</div>
     <div style="font-size:11px;color:#64748b;margin-bottom:6px;">🩸 = จุดตัดขาดทุนอ้างอิงต้นทุนจริง (คงที่ ไม่เลื่อนตามราคา) — ต้องมีข้อมูลต้นทุนจากพอร์ตก่อนถึงจะทำงาน ดูคอลัมน์ "ต้นทุน" ถ้าว่างแปลว่าคอลัมน์นี้ยังใช้ไม่ได้กับหุ้นนั้น</div>
     <div style="font-size:11px;color:#64748b;margin-bottom:6px;">🔒 = หุ้นที่ถืออยู่จริง ระบบเพิ่มให้อัตโนมัติ ลบแล้วจะเพิ่มกลับถ้ายังถือของอยู่ (ขายหมดจะหายเอง) — ถ้าอยากหยุดเฝ้าโดยไม่ลบ ใช้ปุ่ม 🟢/⚪ แทน ส่วนหุ้นที่กด + เพิ่มเอง ลบได้อิสระ ไว้ทดสอบ</div>
+    <div style="font-size:11px;color:#64748b;margin-bottom:6px;">↔️ เลื่อนซ้าย-ขวาในตารางได้ถ้าจอแคบ — ปุ่ม 🟢/⚪ และ 🗑 จะไม่ล้นออกนอกการ์ดแล้ว</div>
     <div id="wlBody"></div>
     <div style="border-top:1px solid #263449;margin:10px 0;"></div>
     <div style="font-size:12px;color:#94a3b8;margin-bottom:6px;">➕ เพิ่มหุ้นใหม่ (ไว้ทดสอบ/เฝ้าก่อนซื้อ)</div>
@@ -1351,7 +1357,7 @@ HTML = """<!DOCTYPE html>
       <div style="width:54px;"><input id="newDrop" type="number" value="60" title="บิดหาย%"></div>
       <div style="width:54px;"><input id="newPriceDrop" type="number" step="0.1" value="1.0" title="ราคาตก%"></div>
       <div style="width:54px;"><input id="newTrail" type="number" step="0.1" value="1.0" title="trailing%"></div>
-      <div style="width:54px;"><input id="newCostStop" type="number" step="0.1" value="5.0" title="ขาดทุนจากต้นทุน%"></div>
+      <div style="width:54px;"><input id="newCostStop" type="number" step="0.1" value="1.0" title="ขาดทุนจากต้นทุน%"></div>
       <button class="btn-buy" onclick="addSymbol()">➕</button>
     </div>
   </div>
@@ -1504,7 +1510,7 @@ async function refresh(){
       if(keys.length===0){
         wl.innerHTML='<div style="color:#64748b;font-size:13px;padding:4px 0;">ยังไม่มีหุ้นในรายการเฝ้า — ถ้าถือหุ้นอยู่จะเพิ่มให้อัตโนมัติ หรือกด + เพิ่มเองด้านล่างเพื่อทดสอบ</div>';
       } else {
-        let whtml='<table><tr><th>หุ้น</th><th>ถือ</th><th>ต้นทุน</th><th>บิดหาย%</th><th>ราคาตก%</th><th>Trail%</th><th>ขาดทุน%</th><th>บน/ปิด</th><th></th></tr>';
+        let whtml='<div class="wl-scroll"><table><tr><th>หุ้น</th><th>ถือ</th><th>ต้นทุน</th><th>บิดหาย%</th><th>ราคาตก%</th><th>Trail%</th><th>ขาดทุน%</th><th>บน/ปิด</th><th></th></tr>';
         for(const k of keys){
           const c=s.watchlist[k]||{};
           const held=(s.positions&&s.positions[k])||0;
@@ -1522,7 +1528,7 @@ async function refresh(){
             <td><button class="btn-danger" onclick="askRemove('${k}')">🗑</button></td>
           </tr>`;
         }
-        whtml+='</table>';
+        whtml+='</table></div>';
         wl.innerHTML=whtml;
       }
     }
