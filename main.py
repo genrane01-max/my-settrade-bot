@@ -1,45 +1,24 @@
 # ==============================================================================
-# SETTRADE BOT v2.12 — Watchlist หลายหุ้น + Trailing % + เทรด MP-MTL/Limit + Chase-sell
-# - แต่ละหุ้นมีค่าเอง (บิดหาย%, trailing%) เก็บใน Firebase /watchlist/<SYMBOL>
-# - ดึงจำนวนหุ้นจากพอร์ตอัตโนมัติ → เจอเหตุการณ์ขายหมดพอร์ต
-# - ทดสอบ Sandbox ก่อน (SETTRADE_APP_CODE=SANDBOX) แล้วค่อยใช้ ALGO
-# - รองรับหลายโบรกเกอร์ผ่าน SETTRADE_BROKER_ID (env var) — ไม่ผูกกับโบรกใดโบรกหนึ่ง
+# SETTRADE BOT v2.14 — Watchlist หลายหุ้น + Trailing % + เทรด MP-MTL/Limit + Chase-sell
+#   + Cost-basis stop-loss + Manual order-status/cancel test tool
+# (ดู comment เวอร์ชันก่อนหน้าในไฟล์ v2.13 สำหรับรายละเอียด v2.1-v2.13 ทั้งหมด)
 #
-# แก้ไข: เพิ่มระบบ "หา method อัตโนมัติ" (_resolve_method) เพราะ SDK settrade_v2
-# ใช้ชื่อ method ไม่ตรงกับที่เอกสาร/ตัวอย่างเก่าบอกไว้เป๊ะๆ ตัวช่วยนี้จะลองชื่อที่เป็นไปได้
-# หลายแบบ ถ้าไม่เจอเลยจะ log รายชื่อ method จริงที่มีอยู่ใน object นั้นออกมาที่ Render
-# logs ให้เห็นเลย จะได้แก้ให้ตรงเป๊ะได้ในทีเดียว
-#
-# v2.1-v2.7: ดูรายละเอียดในไฟล์เวอร์ชันก่อนหน้า (รีเซ็ตข้ามวัน, trailing persist,
-# input polling fix, watchlist auto-sync กับพอร์ต, event-driven check, order log,
-# lunch break, modal confirm แทน native confirm())
-#
-# v2.8: save_trailing/send_telegram/place_order (auto-sell) เป็น fire-and-forget
-# ผ่าน thread pool แยก ไม่ block thread ที่กำลังเช็คหุ้นตัวอื่น
-#
-# v2.9: เพิ่มตัวเลือก "จำกัดราคา (Limit)" ในปุ่มเทรดด่วนของหน้าเว็บ (auto-sell ยังคง
-# ยิง MP-MTL เท่านั้นเสมอ — เป็นกลไกความปลอดภัยที่ต้องการรับประกันว่าขายได้)
-#
-# v2.10: เอา auto-fill ราคาออกจากช่องเทรดด่วน (เคย fill ผิดหุ้นได้ถ้าไม่ได้เลือกจาก dropdown)
-#
-# v2.11 เพิ่ม "ไล่ราคาขายอัตโนมัติ" (chase-sell) สำหรับ auto-sell ทั้ง 2 เงื่อนไข (บิดหาย%/
-#   ราคาตก% และ trailing stop): ส่งขาย MP-MTL → poll สถานะคำสั่ง (matched/balance) → ถ้ายังเหลือค้าง
-#   ยกเลิกส่วนที่ค้างทันที → ส่งขายใหม่สำหรับจำนวนที่เหลือทันที วนไม่เกิน CHASE_MAX_ROUNDS รอบ
-#
-# v2.12:
-#   (1) ยืนยันจาก log จริงตอนบอทรัน chase-sell แล้วว่า field ชื่อจริงคือ "matched"/"balance"
-#       (ไม่มี suffix เช่น Volume) ตรงๆ — candidates list เดิมไม่มีชื่อเปล่าแบบนี้เลยสักตัว ทำให้
-#       ของเดิมจะได้ matched=0, balance=0 เสมอ (ผิดแบบเงียบๆ ไม่ error ให้เห็น) แก้โดยเพิ่ม
-#       "matched"/"balance" เป็น candidate แรกสุดในทั้งสอง list และเพิ่ม "vol" ใน fallback ของ
-#       total_vol ด้วย (ยืนยันจาก log เดียวกันว่า field จำนวนหุ้นทั้งออเดอร์ชื่อ "vol" ไม่ใช่
-#       "volume") — จุดนี้แก้เพราะยืนยันจากข้อมูลจริงแล้ว ไม่ใช่เดา
-#   (2) เพิ่มปุ่ม "ทดสอบยกเลิกคำสั่ง" บนหน้าเว็บ (คนละฟังก์ชันกับ _cancel_order ที่ chase-sell
-#       ใช้อัตโนมัติ — ยังไม่แตะของเดิมจนกว่าจะรู้ signature ที่ถูกต้องจากผลทดสอบนี้ก่อน) ให้กรอก
-#       PIN ได้เอง (คาดว่า SDK ต้องการ PIN ตอนยกเลิก เหมือนแอพ streaming) แล้วลองเรียกหลาย
-#       signature ที่เป็นไปได้ (positional/keyword, มี/ไม่มี pin) ทีละแบบ หยุดที่แบบแรกที่ SDK
-#       "ยอมรับ argument" (ไม่ TypeError) แล้ว log ผลทุกครั้ง ทั้งที่ Render log และส่งกลับมา
-#       แสดงที่หน้าเว็บ เพื่อดูว่า signature ไหนถูกต้องจริงก่อนเอาไปผูกกับ chase-sell อัตโนมัติ
-#       ⚠️ ยังเป็นเครื่องมือทดสอบเท่านั้น ไม่ได้เปลี่ยนพฤติกรรม auto chase-sell ใดๆ ในเวอร์ชันนี้
+# v2.14 — วิเคราะห์จาก log จริงที่ได้จาก SANDBOX (place_order สำเร็จของ KTB):
+#   1) ยืนยัน field name orderNo/matched/balance/vol ถูกต้อง 100% จาก response จริง
+#      (ไม่ต้องแก้ _extract_order_no / _get_order_snapshot อีก — ของเดิมถูกอยู่แล้ว)
+#   2) เจอเบาะแสสำคัญสำหรับปัญหา "Invalid Order state" ที่ค้างมาตั้งแต่ v2.13: response
+#      จริงตอนเพิ่งส่งคำสั่งโชว์ 'status': 'S' ('New order sent to SETTRADE from investor'),
+#      'canCancel': False — แปลว่าออเดอร์มีช่วงสั้นๆ หลังส่งที่ยังยกเลิกไม่ได้จริง (รอ
+#      SETTRADE/ตลาดประมวลผลก่อน) ถ้า chase-sell ไปยิง cancel ในช่วงนี้พอดีจะโดน error นี้
+#      → เพิ่ม retry เฉพาะเจาะจงกับ error message ที่มีคำว่า "Invalid Order state"/SEOSGW-01
+#      เท่านั้น (ไม่ retry error ประเภทอื่น เช่น PIN ผิดรูปแบบ เพราะ retry ไปก็ไม่มีทางสำเร็จ)
+#      ลองใหม่ไม่เกิน CANCEL_STATE_RETRY_MAX ครั้ง เว้นระยะ CANCEL_STATE_RETRY_DELAY วิ
+#   3) เพิ่ม log แสดง canCancel ชัดๆ ก่อนตัดสินใจยกเลิกทุกครั้งใน chase-sell (ไม่ต้องเดา/
+#      ไปขุด log อื่นมาประกอบทีหลังอีก)
+#   ⚠️ SANDBOX อาจไม่มี matching engine จริงประมวลผลออเดอร์ให้พ้นสถานะ 'S' เลย (ไม่เหมือน
+#   ALGO ที่จะประมวลผลจริง) ถ้า retry แล้วยัง "Invalid Order state" อยู่ดีทุกครั้งใน SANDBOX
+#   อาจเป็นข้อจำกัดของ SANDBOX เองที่ทดสอบเรื่องนี้ให้จบไม่ได้ ต้องทดสอบกับ ALGO จริง
+#   (จำนวนหุ้นน้อยๆ) ถึงจะฟันธงได้ 100% ว่า retry นี้แก้ปัญหาจริงหรือไม่
 # ==============================================================================
 
 import os
@@ -68,37 +47,42 @@ equity = None
 realtime = None
 
 state = {
-    "enabled": True,          # ปุ่มเปิด-ปิดบอทรวม
+    "enabled": True,
     "connected": False,
-    "selected": "",            # หุ้นที่กำลังดูจอบิด/ออฟเฟอร์
-    "watchlist": {},          # { SYMBOL: {bid_drop_pct, trailing_pct, price_drop_pct, active, pinned} }
-    "positions": {},          # { SYMBOL: จำนวนหุ้นที่ถือ } — ดิบๆ จาก get_portfolios() ตรงๆ
-    "symbols": {},            # { SYMBOL: {bids, offers, last_price, highest, stop, prev_bid1_vol, drop, last_action, selling} }
+    "selected": "",
+    "watchlist": {},
+    "positions": {},
+    "avg_cost": {},
+    "symbols": {},
     "pos_updated": 0,
-    "order_log": [],          # ประวัติคำสั่งซื้อ/ขาย 20 รายการล่าสุด
+    "order_log": [],
 }
-subscribed = set()  # หุ้นที่สตรีมอยู่แล้ว
-_last_trading_date = None  # วันเทรดล่าสุดที่เคยรีเซ็ต baseline ไปแล้ว (เวลาไทย)
+subscribed = set()
+_last_trading_date = None
 
-# pinned=False หมายถึงหุ้นที่ระบบเพิ่มเข้ามาเองเพราะเจอในพอร์ต (auto)
-# pinned=True หมายถึงหุ้นที่กด + เพิ่มเองผ่านหน้าเว็บ (manual/ไว้ทดสอบ)
-DEFAULT_CFG = {"bid_drop_pct": 60.0, "trailing_pct": 1.0, "price_drop_pct": 1.0, "active": True, "pinned": False}
+DEFAULT_CFG = {
+    "bid_drop_pct": 60.0, "trailing_pct": 1.0, "price_drop_pct": 1.0,
+    "cost_stop_pct": 5.0,
+    "active": True, "pinned": False,
+}
 
-# ---- ค่าตั้งความปลอดภัย (แก้ตามคุยกัน) ----
-STALE_POSITION_SECONDS = 180   # ถ้าดึงพอร์ตไม่สำเร็จเกิน 3 นาที → หยุดเทรดอัตโนมัติชั่วคราว
-SELL_ORDER_TIMEOUT = 2         # วินาที — รอคำตอบคำสั่งขายไม่เกินนี้ ไม่บล็อก loop หลัก (ไม่ยิงซ้ำอัตโนมัติ)
-MARKET_OPEN_HHMM = (9, 55)     # เผื่อช่วง pre-open/ATO ก่อนตลาดเปิดจริง 10:00
-MARKET_CLOSE_HHMM = (16, 40)   # เผื่อช่วง ATC/หลังปิด
+STALE_POSITION_SECONDS = 180
+SELL_ORDER_TIMEOUT = 2
+MARKET_OPEN_HHMM = (9, 55)
+MARKET_CLOSE_HHMM = (16, 40)
 MARKET_LUNCH_START_HHMM = (12, 30)
 MARKET_LUNCH_END_HHMM = (14, 30)
-BOT_LOOP_INTERVAL = 2          # วิ — งานพื้นหลัง (sync watchlist/positions) ไม่ต้องไวเท่าเช็คขาย
-ORDER_LOG_MAX = 20             # เก็บประวัติคำสั่งซื้อ/ขายไว้กี่รายการล่าสุด
+BOT_LOOP_INTERVAL = 2
+ORDER_LOG_MAX = 20
 TICK_LOG_ENABLED = os.getenv("TICK_LOG_ENABLED", "0") == "1"
 
-# ---- ค่าตั้งไล่ราคาขาย (chase-sell) — v2.11 ----
-CHASE_MAX_ROUNDS = 5                 # ไล่ราคาขายไม่เกินกี่รอบ (cancel+re-place) กัน loop ไม่จบ
-CHASE_POLL_INTERVAL = 0.3            # วิ — เว้นระยะ poll สถานะคำสั่งระหว่างรอผล
-CHASE_POLL_TIMEOUT_PER_ROUND = 3.0   # วิ — รอผลคำสั่งต่อรอบนานสุดก่อนตัดสินใจยกเลิกส่วนที่เหลือ
+CHASE_MAX_ROUNDS = 5
+CHASE_POLL_INTERVAL = 0.3
+CHASE_POLL_TIMEOUT_PER_ROUND = 3.0
+
+# v2.14: retry เฉพาะกรณี cancel เจอ "Invalid Order state" — ดูคอมเมนต์หัวไฟล์
+CANCEL_STATE_RETRY_MAX = 2
+CANCEL_STATE_RETRY_DELAY = 0.5  # วิ
 
 _order_executor = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="order")
 _io_executor = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="io")
@@ -170,6 +154,7 @@ def load_watchlist():
                     "bid_drop_pct": float(cfg.get("bid_drop_pct", DEFAULT_CFG["bid_drop_pct"])),
                     "trailing_pct": float(cfg.get("trailing_pct", DEFAULT_CFG["trailing_pct"])),
                     "price_drop_pct": float(cfg.get("price_drop_pct", DEFAULT_CFG["price_drop_pct"])),
+                    "cost_stop_pct": float(cfg.get("cost_stop_pct", DEFAULT_CFG["cost_stop_pct"])),
                     "active": bool(cfg.get("active", True)),
                     "pinned": bool(cfg.get("pinned", False)),
                 }
@@ -287,6 +272,7 @@ def refresh_positions(force=False):
             items = raw or []
 
         pos = {}
+        avg_cost = {}
         for item in items:
             if not isinstance(item, dict):
                 continue
@@ -305,6 +291,20 @@ def refresh_positions(force=False):
             )
             if sym:
                 pos[sym] = int(vol or 0)
+            cost = (
+                item.get("averagePrice")
+                if item.get("averagePrice") not in (None, 0)
+                else item.get("average_price")
+                if item.get("average_price") not in (None, 0)
+                else item.get("avgPrice")
+                if item.get("avgPrice") not in (None, 0)
+                else item.get("costPrice")
+            )
+            if sym and cost not in (None, 0):
+                try:
+                    avg_cost[sym] = float(cost)
+                except (TypeError, ValueError):
+                    pass
 
         if not pos and raw:
             list_is_genuinely_empty = (
@@ -315,6 +315,7 @@ def refresh_positions(force=False):
 
         with lock:
             state["positions"] = pos
+            state["avg_cost"] = avg_cost
             state["pos_updated"] = now
     except Exception as e:
         logger.error(f"get_portfolio error: {e}")
@@ -364,11 +365,6 @@ def _record_order(entry):
         state["order_log"] = state["order_log"][:ORDER_LOG_MAX]
 
 def _extract_order_no(resp):
-    """
-    ดึง order number จาก response ของ equity.place_order() — v2.11
-    ⚠️ ยังไม่ยืนยัน field name จริงจากตลาดจริง (ต้องดู Render log ตอนทดสอบ ALGO จริง
-    ว่า resp จริงๆ หน้าตาเป็นยังไง) ลองหลายชื่อ key ที่เป็นไปได้ ทั้งแบบ dict และ object
-    """
     candidates = ("orderNo", "order_no", "orderId", "order_id", "id", "orderNumber", "no")
     if isinstance(resp, dict):
         for k in candidates:
@@ -383,13 +379,6 @@ def _extract_order_no(resp):
     return None
 
 def place_order(side, symbol, volume, pin, price_type="MP-MTL", price=0.0):
-    """
-    side='Buy'/'Sell'
-    price_type="MP-MTL" (ค่าเริ่มต้น) = ราคาตลาด, price ไม่มีผลใดๆ ส่งเป็น 0.0 เสมอ
-    price_type="Limit" = จำกัดราคาเอง ต้องส่ง price เป็นราคาที่ต้องการ (บาท) มาด้วย
-    v2.11: คืนค่า "order_no" เพิ่มในผลลัพธ์ด้วย (ถ้าดึงได้) ให้ _sell_chase_worker เอาไป
-    เช็คสถานะ/ยกเลิกต่อได้ — ไม่กระทบผู้เรียกเดิมที่ไม่ได้ใช้ field นี้
-    """
     price_type = price_type or "MP-MTL"
     use_price = float(price) if price_type == "Limit" else 0.0
     entry = {
@@ -445,7 +434,6 @@ def _log_late_order_result(side, symbol, volume, future):
         logger.error(f"late order result error: {e}")
 
 def place_order_async(side, symbol, volume, pin, price_type="MP-MTL", price=0.0, timeout=SELL_ORDER_TIMEOUT):
-    """ ใช้ path ที่ต้องการผลลัพธ์ทันที (รอไม่เกิน timeout วิ) — ไม่ได้ใช้ในตรรกะ auto-sell """
     future = _order_executor.submit(place_order, side, symbol, volume, pin, price_type, price)
     try:
         return future.result(timeout=timeout)
@@ -457,10 +445,7 @@ def place_order_async(side, symbol, volume, pin, price_type="MP-MTL", price=0.0,
         future.add_done_callback(lambda f: _log_late_order_result(side, symbol, volume, f))
         return {"ok": None, "msg": f"timeout {timeout}s — รอผลจริงทีหลัง"}
 
-# ===================== ไล่ราคาขายอัตโนมัติ (chase-sell) — v2.11 =====================
-# ดูคำอธิบายเต็มที่คอมเมนต์ v2.11 บนสุดของไฟล์ — สรุปสั้นๆ: ส่งขาย MP-MTL → poll สถานะ
-# → เหลือค้างก็ยกเลิก+ส่งใหม่ทันที วนไม่เกิน CHASE_MAX_ROUNDS รอบ ทำงานเป็น background
-# thread เสมอ ไม่ block เธรดหลัก/lock ระหว่าง poll
+# ===================== ไล่ราคาขายอัตโนมัติ (chase-sell) =====================
 
 def _resolve_orders_method():
     return _resolve_method(
@@ -470,14 +455,6 @@ def _resolve_orders_method():
     )
 
 def _get_order_snapshot(order_no):
-    """
-    v2.12: ยืนยันจาก log จริงตอนบอทรัน chase-sell แล้วว่า field ชื่อ "matched"/"balance"
-    (ไม่มี suffix) ตรงๆ — เพิ่มเป็น candidate แรกสุดในทั้งสอง list และเพิ่ม "vol" ใน fallback
-    ของ total_vol (ยืนยันจาก log เดียวกัน) ส่วนวิธี resolve method หา list คำสั่งทั้งบัญชี
-    ยังคงเดิม: ลอง resolve แล้วกรองหา order_no ที่ตรง คืน dict {"matched", "balance",
-    "status", "can_cancel", "raw"} หรือ None ถ้าหาไม่เจอ/error — ให้ผู้เรียกตัดสินใจหยุดไล่
-    ราคาเอง (ไม่เดาต่อ)
-    """
     get_orders = _resolve_orders_method()
     if get_orders is None or equity is None:
         return None
@@ -494,7 +471,7 @@ def _get_order_snapshot(order_no):
                 items = raw.get(key)
                 break
         if items is None:
-            items = [raw]  # เผื่อ SDK คืนออเดอร์เดียวตรงๆ ไม่ห่อ list
+            items = [raw]
     else:
         items = raw or []
 
@@ -522,13 +499,16 @@ def _get_order_snapshot(order_no):
             total_vol = item.get("vol") or item.get("volume") or item.get("totalVolume") or item.get("qty") or 0
             balance = max(0, int(total_vol or 0) - matched)
         status = item.get("status") or item.get("orderStatus") or ""
+        status_meaning = item.get("showOrderStatusMeaning") or item.get("showOrderStatus") or ""
         can_cancel = item.get("canCancel")
-        status_meaning = item.get("showOrderStatusMeaning") or ""
         logger.info(
             f"[chase-sell] #{order_no} snapshot: matched={matched} balance={balance} "
-            f"status={status} canCancel={can_cancel} ({status_meaning})"
+            f"status={status} ({status_meaning}) canCancel={can_cancel}"
         )
-        return {"matched": matched, "balance": balance, "status": status, "can_cancel": can_cancel, "raw": item}
+        return {
+            "matched": matched, "balance": balance, "status": status,
+            "status_meaning": status_meaning, "can_cancel": can_cancel, "raw": item,
+        }
 
     logger.warning(
         f"[chase-sell] หา order_no={order_no} ไม่เจอใน get_orders ผลลัพธ์ — อาจ field ชื่อไม่ตรง "
@@ -536,8 +516,24 @@ def _get_order_snapshot(order_no):
     )
     return None
 
+def check_order_status(order_no):
+    snap = _get_order_snapshot(order_no)
+    if snap is None:
+        return {
+            "ok": False,
+            "msg": "หา order นี้ไม่เจอ หรือ resolve method/field ไม่ได้ — ดู Render log "
+                   "บรรทัด [chase-sell] เพื่อดูรายละเอียด",
+        }
+    return {
+        "ok": True,
+        "matched": snap["matched"],
+        "balance": snap["balance"],
+        "status": snap["status"],
+        "status_meaning": snap.get("status_meaning", ""),
+        "can_cancel": snap["can_cancel"],
+    }
+
 def _poll_order_until_settled(order_no, timeout, interval):
-    """ poll จนกว่า balance เหลือ 0 (ขายหมด) หรือหมดเวลา timeout ก็คืนค่าล่าสุดที่มี """
     elapsed = 0.0
     last = None
     while elapsed < timeout:
@@ -551,12 +547,30 @@ def _poll_order_until_settled(order_no, timeout, interval):
         elapsed += interval
     return last
 
-def _cancel_order(order_no, symbol):
+def _call_cancel_flexible(cancel_fn, order_no, pin, account_no):
+    attempts = [
+        lambda: cancel_fn(order_no, pin),  # ยืนยันแล้วว่า SDK รับ (SEOSGW-08/SEOSGW-01 ไม่ใช่ TypeError)
+        lambda: cancel_fn(order_no=order_no, pin=pin),
+        lambda: cancel_fn(order_no=order_no, account_no=account_no, pin=pin),
+        lambda: cancel_fn(account_no=account_no, order_no=order_no, pin=pin),
+        lambda: cancel_fn(order_no, account_no, pin),
+        lambda: cancel_fn(account_no, order_no, pin),
+    ]
+    last_type_error = None
+    for attempt in attempts:
+        try:
+            return attempt()
+        except TypeError as e:
+            last_type_error = e
+            continue
+    raise last_type_error
+
+def _cancel_order(order_no, symbol, pin):
     """
-    ⚠️ ใช้โดย chase-sell อัตโนมัติเท่านั้น — ยังไม่แก้ signature ในเวอร์ชันนี้ เพราะยังไม่รู้ว่า
-    SDK ต้องการ PIN หรือไม่/แบบไหน ให้ใช้ปุ่ม "ทดสอบยกเลิกคำสั่ง" บนหน้าเว็บ (เรียก
-    _cancel_order_manual_test ด้านล่าง) ทดสอบหา signature ที่ถูกต้องก่อน แล้วค่อยเอามาแก้ตรงนี้
-    ในเวอร์ชันถัดไป — ตอนนี้ยังคงพฤติกรรมเดิม (ไม่ส่ง pin) ไว้ก่อน
+    v2.14: เพิ่ม retry เฉพาะกรณี error มีคำว่า "Invalid Order state" (SEOSGW-01) — พบจาก log
+    จริงว่า canCancel=False ทันทีหลังส่งคำสั่งใหม่ (status 'S' = เพิ่งส่งไปยังไม่ถูกประมวลผล)
+    ลองใหม่สั้นๆ ไม่เกิน CANCEL_STATE_RETRY_MAX ครั้ง เว้น CANCEL_STATE_RETRY_DELAY วิ ก่อนยอมแพ้
+    ไม่ retry error ประเภทอื่น (เช่น PIN ผิดรูปแบบ) เพราะไม่มีทางสำเร็จไม่ว่าลองกี่ครั้งก็ตาม
     """
     cancel_fn = _resolve_method(
         equity,
@@ -565,19 +579,27 @@ def _cancel_order(order_no, symbol):
     )
     if cancel_fn is None or equity is None:
         return False
-    try:
-        resp = _call_flexible(cancel_fn, order_no)
-        logger.info(f"🚫 [chase-sell] ยกเลิกคำสั่ง {symbol} #{order_no} → {resp}")
-        return True
-    except Exception as e:
-        logger.error(f"[chase-sell] cancel_order #{order_no} error: {e}")
-        return False
-
-# ===================== ทดสอบยกเลิกคำสั่งด้วยมือ (manual cancel test) — v2.12 =====================
-# แยกออกจาก _cancel_order() ที่ chase-sell ใช้อัตโนมัติโดยสิ้นเชิง — ฟังก์ชันนี้ไม่ถูกเรียกจาก
-# ที่ไหนอัตโนมัติทั้งสิ้น ต้องกดปุ่มบนหน้าเว็บเท่านั้น ใช้สำรวจว่า SDK ต้องการ PIN แบบไหนตอน
-# ยกเลิกคำสั่ง (คาดว่าต้องการ เหมือนแอพ streaming) โดยลองเรียกหลาย signature ที่เป็นไปได้ทีละ
-# แบบ หยุดที่แบบแรกที่ SDK "ยอมรับ argument" (ไม่ throw TypeError) แล้ว log ผลทุกครั้ง
+    account_no = os.getenv("SETTRADE_ACCOUNT_N")
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            resp = _call_cancel_flexible(cancel_fn, order_no, pin, account_no)
+            logger.info(f"🚫 [chase-sell] ยกเลิกคำสั่ง {symbol} #{order_no} → {resp}")
+            return True
+        except Exception as e:
+            err_str = str(e)
+            is_state_error = "Invalid Order state" in err_str or "SEOSGW-01" in err_str
+            if is_state_error and attempt <= CANCEL_STATE_RETRY_MAX:
+                logger.warning(
+                    f"[chase-sell] cancel_order {symbol} #{order_no} รอบลอง {attempt}: "
+                    f"'Invalid Order state' — น่าจะยังอยู่ในช่วงสั้นๆ ที่ยังยกเลิกไม่ได้ "
+                    f"(canCancel มักเป็น False ทันทีหลังส่งคำสั่งใหม่) ลองใหม่ใน {CANCEL_STATE_RETRY_DELAY}s"
+                )
+                time.sleep(CANCEL_STATE_RETRY_DELAY)
+                continue
+            logger.error(f"[chase-sell] cancel_order {symbol} #{order_no} error (รอบ {attempt}): {e}")
+            return False
 
 def _cancel_order_manual_test(order_no, pin, symbol=""):
     cancel_fn = _resolve_method(
@@ -594,7 +616,7 @@ def _cancel_order_manual_test(order_no, pin, symbol=""):
 
     account_no = os.getenv("SETTRADE_ACCOUNT_N")
     attempts = [
-        ("cancel_fn(order_no, pin)", lambda: cancel_fn(order_no, pin)),
+        ("cancel_fn(order_no, pin)  [ยืนยันแล้วว่า SDK รับ]", lambda: cancel_fn(order_no, pin)),
         ("cancel_fn(order_no, pin=pin)", lambda: cancel_fn(order_no, pin=pin)),
         ("cancel_fn(order_no=order_no, pin=pin)", lambda: cancel_fn(order_no=order_no, pin=pin)),
         ("cancel_fn(pin=pin, order_no=order_no)", lambda: cancel_fn(pin=pin, order_no=order_no)),
@@ -603,7 +625,7 @@ def _cancel_order_manual_test(order_no, pin, symbol=""):
             "cancel_fn(account_no=account_no, order_no=order_no, pin=pin)",
             lambda: cancel_fn(account_no=account_no, order_no=order_no, pin=pin),
         ),
-        ("cancel_fn(order_no)", lambda: cancel_fn(order_no)),  # เผื่อไม่ต้อง pin เลย
+        ("cancel_fn(order_no)  [เผื่อไม่ต้อง pin เลย]", lambda: cancel_fn(order_no)),
     ]
 
     tried = []
@@ -621,15 +643,13 @@ def _cancel_order_manual_test(order_no, pin, symbol=""):
             tried.append({"signature": desc, "error": err})
             continue
         except Exception as e:
-            # error ที่ไม่ใช่ TypeError แปลว่า SDK "รับ" signature นี้แล้ว (ผ่านขั้นตรวจ argument
-            # ไปถึงขั้น business logic เช่น pin ผิด/order ยกเลิกไม่ได้แล้ว) — หยุดตรงนี้ ไม่ลองต่อ
-            # เพราะนี่คือสัญญาณที่ชัดที่สุดว่า signature ไหนคือของจริง
             err = f"{type(e).__name__}: {e}"
             msg = (
                 f"🧪 [manual-cancel] {symbol} #{order_no} ลองแล้ว: {desc}\n"
                 f"SDK รับ signature นี้ (ไม่ใช่ TypeError) แต่ error ระดับ business logic: {err}\n"
                 f"↳ นี่น่าจะเป็น signature ที่ถูกต้อง แค่ order นี้ยกเลิกไม่ได้ด้วยเหตุผลอื่น "
-                f"(เช่น canCancel=False ตอนนี้, PIN ผิด, order match ไปแล้ว)"
+                f"(เช่น canCancel=False ตอนนี้, PIN ผิดรูปแบบ/ผิด, order match ไปแล้ว) — ลองกด "
+                f"'🔍 เช็คสถานะ' ก่อนเพื่อดู canCancel/status จริงของออเดอร์นี้"
             )
             logger.error(msg)
             send_telegram(msg)
@@ -647,15 +667,6 @@ def _cancel_order_manual_test(order_no, pin, symbol=""):
     return {"ok": False, "msg": "ลองทุกแบบแล้วไม่มี signature ไหนถูกต้อง (TypeError หมด)", "tried_before": tried}
 
 def _sell_chase_worker(symbol, initial_held, pin, tick_ts):
-    """
-    v2.11 — background thread เดียวสำหรับหุ้น 1 ตัวต่อ 1 เหตุการณ์ trigger (บิดหาย%/
-    ราคาตก% หรือ trailing stop เหมือนกันหมด ใช้ path เดียวกันนี้ทั้งคู่):
-    ส่งขาย MP-MTL → poll สถานะ → เหลือค้างก็ยกเลิก+ส่งใหม่ทันทีสำหรับจำนวนที่เหลือ
-    (MP-MTL รอบใหม่จะไปจับคู่บิดชั้นถัดไปที่ดีที่สุด ณ ขณะนั้นเอง) วนไม่เกิน
-    CHASE_MAX_ROUNDS รอบ ตัด position ตามจำนวน "matched" จริงเท่านั้นทุกรอบ
-    ถ้า resolve method ไม่เจอ/เช็คสถานะไม่ได้ระหว่างทาง → หยุดไล่ราคาทันที ไม่เดาต่อ
-    ปล่อยให้ refresh_positions() รอบถัดไป (ภายใน 30 วิ) ปรับพอร์ตให้ตรงแทน
-    """
     remaining = initial_held
     round_num = 0
     while remaining > 0 and round_num < CHASE_MAX_ROUNDS:
@@ -687,15 +698,20 @@ def _sell_chase_worker(symbol, initial_held, pin, tick_ts):
         remaining = balance
 
         if remaining > 0:
-            cancelled = _cancel_order(order_no, symbol)
+            # v2.14: log canCancel ชัดๆ ก่อนตัดสินใจยกเลิกทุกครั้ง (ดูคอมเมนต์หัวไฟล์)
+            logger.info(
+                f"[chase-sell] {symbol} รอบ {round_num}: เหลือค้าง {remaining} หุ้น "
+                f"(canCancel={snap.get('can_cancel')}) → จะลองยกเลิก"
+            )
+            cancelled = _cancel_order(order_no, symbol, pin)
             if not cancelled:
                 msg = (f"⚠️ [chase-sell] {symbol} รอบ {round_num}/{CHASE_MAX_ROUNDS}: ยกเลิกคำสั่งค้าง "
                        f"{remaining} หุ้น (#{order_no}) ไม่สำเร็จ — หยุดไล่ราคา อาจมีคำสั่งซ้อนค้างอยู่ "
-                       f"ตรวจสอบด้วยตัวเองด่วน")
+                       f"ตรวจสอบด้วยตัวเองด่วน (ลองกด '🔍 เช็คสถานะ' หรือ '🧪 ทดสอบยกเลิก' บนหน้าเว็บ "
+                       f"ด้วย order_no นี้เพื่อดูรายละเอียดเพิ่ม)")
                 logger.error(msg)
                 send_telegram_async(msg)
                 break
-            # วนกลับไปยิงขายรอบใหม่ทันทีสำหรับ `remaining` ที่เหลือ (ไม่หน่วงเวลาเพิ่ม)
 
     if remaining > 0:
         msg = (f"🛑 [chase-sell] {symbol} ไล่ราคาครบ {round_num} รอบแล้วยังเหลือ {remaining} หุ้น "
@@ -758,7 +774,7 @@ def _check_symbol_and_maybe_sell(symbol, tick_ts=None):
         if not s:
             return
         if s.get("selling"):
-            return  # กำลังไล่ราคาขาย (chase-sell) อยู่จาก trigger ก่อนหน้า กันสั่งขายซ้ำซ้อน
+            return
         threshold = float(cfg.get("bid_drop_pct", 60.0))
         trailing_pct = float(cfg.get("trailing_pct", 1.0))
         held = int(state["positions"].get(symbol, 0) or 0)
@@ -796,14 +812,36 @@ def _check_symbol_and_maybe_sell(symbol, tick_ts=None):
                 s["last_action"] = msg
                 s["prev_bid1_vol"] = 0
                 s["prev_bid1_price"] = 0
-                s["selling"] = True  # v2.11: ให้ chase worker ตัด position เองตาม matched จริง
+                s["selling"] = True
                 sell_action = (msg, held)
             else:
                 s["prev_bid1_vol"] = bid1_vol
                 s["prev_bid1_price"] = bid1_price
 
+        last = s.get("last_price", 0.0)
+
+        if sell_action is None and last > 0:
+            cost_stop_pct = float(cfg.get("cost_stop_pct", DEFAULT_CFG["cost_stop_pct"]))
+            avg_cost = float(state["avg_cost"].get(symbol, 0) or 0)
+            if avg_cost > 0:
+                if last < avg_cost:
+                    cost_drop_pct = (avg_cost - last) / avg_cost * 100
+                    if cost_drop_pct >= cost_stop_pct:
+                        msg = (f"🩸 {symbol} ราคา {last} ขาดทุนจากต้นทุน {avg_cost:.2f} "
+                               f"({cost_drop_pct:.2f}%) เกิน {cost_stop_pct}% → ตัดขาดทุน "
+                               f"ขาย {held} หุ้น (ไล่ราคาจนหมด)")
+                        logger.warning(msg)
+                        s["last_action"] = msg
+                        s["selling"] = True
+                        sell_action = (msg, held)
+            elif not s.get("_cost_stop_warned"):
+                logger.warning(
+                    f"[cost-stop] {symbol} ไม่มีข้อมูลต้นทุนเฉลี่ย (avg_cost) — cost-basis "
+                    f"stop-loss จะไม่ทำงานกับหุ้นนี้ ใช้ price_drop_pct/trailing แทนไปก่อน"
+                )
+                s["_cost_stop_warned"] = True
+
         if sell_action is None:
-            last = s.get("last_price", 0.0)
             if last > 0:
                 highest = s.get("highest", 0.0)
                 if last > highest:
@@ -818,7 +856,7 @@ def _check_symbol_and_maybe_sell(symbol, tick_ts=None):
                     s["last_action"] = msg
                     s["stop"] = 0
                     trailing_to_persist = (symbol, s["highest"], 0)
-                    s["selling"] = True  # v2.11: เหมือนกัน — ให้ chase worker ตัด position เอง
+                    s["selling"] = True
                     sell_action = (msg, held)
 
     if trailing_to_persist:
@@ -934,7 +972,7 @@ def new_trading_day_reset():
         for sym, s in state["symbols"].items():
             s["prev_bid1_vol"] = 0
             s["prev_bid1_price"] = 0
-            s["selling"] = False  # v2.11: กันธง selling ค้างข้ามวันถ้า Render restart กลางไล่ราคา
+            s["selling"] = False
         subscribed.clear()
     logger.info("📅 เข้าสู่วันเทรดใหม่ → รีเซ็ต baseline บิดหาย%/ราคาตก% และบังคับ subscribe ใหม่")
 
@@ -998,9 +1036,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
                         "offers": sd.get("offers", []),
                         "last_action": sd.get("last_action", "รอข้อมูล..."),
                         "selling": sd.get("selling", False),
+                        "avg_cost": state["avg_cost"].get(sel, 0),
                     },
                     "watchlist": state["watchlist"],
                     "positions": state["positions"],
+                    "avg_cost": state["avg_cost"],
                     "order_log": state["order_log"],
                 }
             self.send_json(payload)
@@ -1082,7 +1122,6 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
 
         if path == "/api/manual_cancel":
-            # v2.12: ปุ่มทดสอบยกเลิกคำสั่งด้วยมือ — คนละ path กับ chase-sell อัตโนมัติโดยสิ้นเชิง
             order_no = str(data.get("order_no", "")).strip()
             pin = data.get("pin", "")
             symbol = data.get("symbol", "").strip().upper()
@@ -1095,6 +1134,14 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self.send_json(_cancel_order_manual_test(order_no, pin, symbol))
             return
 
+        if path == "/api/order_status":
+            order_no = str(data.get("order_no", "")).strip()
+            if not order_no:
+                self.send_json({"ok": False, "msg": "ใส่ Order No ก่อน"})
+                return
+            self.send_json(check_order_status(order_no))
+            return
+
         if path == "/api/watchlist/add":
             sym = data.get("symbol", "").upper().strip()
             if not sym:
@@ -1104,6 +1151,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 "bid_drop_pct": float(data.get("bid_drop_pct", 60)),
                 "trailing_pct": float(data.get("trailing_pct", 1.0)),
                 "price_drop_pct": float(data.get("price_drop_pct", 1.0)),
+                "cost_stop_pct": float(data.get("cost_stop_pct", DEFAULT_CFG["cost_stop_pct"])),
                 "active": True,
                 "pinned": True,
             }
@@ -1126,6 +1174,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 "bid_drop_pct": float(data.get("bid_drop_pct", 60)),
                 "trailing_pct": float(data.get("trailing_pct", 1.0)),
                 "price_drop_pct": float(data.get("price_drop_pct", 1.0)),
+                "cost_stop_pct": float(data.get("cost_stop_pct", DEFAULT_CFG["cost_stop_pct"])),
                 "active": bool(data.get("active", True)),
                 "pinned": bool(existing.get("pinned", False)),
             }
@@ -1171,6 +1220,7 @@ HTML = """<!DOCTYPE html>
   button { border:none; border-radius:10px; padding:12px; font-size:16px; font-weight:bold; color:#fff; cursor:pointer; }
   .btn-buy { background:#059669; } .btn-sell { background:#dc2626; }
   .btn-toggle { background:#2563eb; } .btn-ghost { background:#334155; } .btn-danger { background:#991b1b; }
+  .btn-info { background:#0369a1; }
   input, select { width:100%; padding:10px; border-radius:8px; border:1px solid #334155; background:#0b1220; color:#fff; font-size:16px; margin-top:4px; }
   label { font-size:12px; color:#94a3b8; font-weight:600; }
   table { width:100%; border-collapse:collapse; font-size:13px; }
@@ -1254,25 +1304,30 @@ HTML = """<!DOCTYPE html>
   <!-- โซน 3.5: ประวัติคำสั่งซื้อขาย -->
   <div class="card">
     <div style="font-weight:bold;margin-bottom:8px;">🧾 ประวัติคำสั่ง (ล่าสุด 20 รายการ)</div>
-    <div style="font-size:11px;color:#64748b;margin-bottom:6px;">ตอนไล่ราคาขายอัตโนมัติ (chase-sell) แต่ละรอบจะขึ้นเป็นคนละแถวในนี้ — กด 🚫 เพื่อดึง Order No ไปกรอกในช่องทดสอบยกเลิกด้านล่าง</div>
+    <div style="font-size:11px;color:#64748b;margin-bottom:6px;">ตอนไล่ราคาขายอัตโนมัติ (chase-sell) แต่ละรอบจะขึ้นเป็นคนละแถวในนี้ — กด 🚫 เพื่อดึง Order No ไปกรอกในช่องทดสอบยกเลิก/เช็คสถานะด้านล่าง</div>
     <div id="orderLogBody" style="font-size:12px;color:#64748b;">ยังไม่มีคำสั่ง</div>
   </div>
 
-  <!-- โซน 3.6: ทดสอบยกเลิกคำสั่ง (manual, v2.12) -->
+  <!-- โซน 3.6: เช็คสถานะ / ทดสอบยกเลิกคำสั่ง -->
   <div class="card">
-    <div style="font-weight:bold;margin-bottom:8px;">🧪 ทดสอบยกเลิกคำสั่ง (Manual Cancel Test)</div>
+    <div style="font-weight:bold;margin-bottom:8px;">🔍 เช็คสถานะ / 🧪 ทดสอบยกเลิกคำสั่ง</div>
     <div style="font-size:11px;color:#64748b;margin-bottom:6px;">
-      ใช้หา signature ที่ถูกต้องของ SDK เท่านั้น — ยังไม่ผูกกับ chase-sell อัตโนมัติ (ของเดิมยังทำงาน
-      เหมือนก่อน) พิมพ์ Order No เองหรือกด 🚫 จากตารางประวัติคำสั่งด้านบนก็ได้ ผลจะโชว์ที่นี่และ
-      ดูละเอียดกว่าได้ที่ Render logs (บรรทัดขึ้นต้นด้วย "[manual-cancel]")
+      ใช้หา signature ที่ถูกต้องของ SDK และตรวจสอบสถานะออเดอร์ — ไม่ผูกกับ chase-sell อัตโนมัติ
+      (ของเดิมใช้ signature ที่ยืนยันแล้วอยู่แล้ว) พิมพ์ Order No เองหรือกด 🚫 จากตารางประวัติ
+      คำสั่งด้านบนก็ได้ "🔍 เช็คสถานะ" ไม่มีผลข้างเคียงและไม่ต้องใช้ PIN แนะนำให้กดก่อนเสมอ
+      ก่อนจะลอง "🧪 ทดสอบยกเลิก" ซึ่งต้องใช้ PIN และมีผลจริงกับออเดอร์ — ใส่ PIN เป็นตัวเลขล้วนๆ
+      เท่านั้น (ห้ามมีช่องว่าง/ตัวอักษร ไม่งั้นจะได้ error "Invalid Pin Format")
     </div>
     <div class="row">
       <div class="grow"><label>Order No</label><input id="cancelOrderNo" placeholder="เช่น 64UJS0PUXL"></div>
       <div class="grow"><label>หุ้น (แค่ label ไม่บังคับ)</label><input id="cancelSymbol" placeholder="เช่น UKEM"></div>
     </div>
-    <label>PIN</label>
+    <label>PIN (ใช้เฉพาะตอนกดทดสอบยกเลิก)</label>
     <input id="cancelPin" type="password" inputmode="numeric">
-    <button class="btn-sell" style="width:100%;margin-top:10px;" onclick="testCancel()">🧪 ทดสอบยกเลิก</button>
+    <div class="row" style="margin-top:10px;">
+      <button class="btn-info grow" onclick="checkStatus()">🔍 เช็คสถานะ</button>
+      <button class="btn-sell grow" onclick="testCancel()">🧪 ทดสอบยกเลิก</button>
+    </div>
     <div id="cancelResult" class="log" style="margin-top:10px;display:none;"></div>
   </div>
 
@@ -1285,16 +1340,18 @@ HTML = """<!DOCTYPE html>
   <!-- โซน 4: Watchlist -->
   <div class="card">
     <div style="font-weight:bold;margin-bottom:8px;">📋 รายการเฝ้า (Watchlist)</div>
-    <div style="font-size:11px;color:#64748b;margin-bottom:4px;">บิดหาย% หรือ ราคาตก% (แล้วแต่อันไหนถึงก่อน) → ไล่ราคาขายหมดพอร์ตด้วย MP-MTL (cancel+ส่งใหม่อัตโนมัติถ้าขายไม่หมดในรอบเดียว)</div>
+    <div style="font-size:11px;color:#64748b;margin-bottom:4px;">บิดหาย% หรือ ราคาตก% หรือ ขาดทุนจากต้นทุน% (แล้วแต่อันไหนถึงก่อน) → ไล่ราคาขายหมดพอร์ตด้วย MP-MTL (cancel+ส่งใหม่อัตโนมัติถ้าขายไม่หมดในรอบเดียว)</div>
+    <div style="font-size:11px;color:#64748b;margin-bottom:6px;">🩸 = จุดตัดขาดทุนอ้างอิงต้นทุนจริง (คงที่ ไม่เลื่อนตามราคา) — ต้องมีข้อมูลต้นทุนจากพอร์ตก่อนถึงจะทำงาน ดูคอลัมน์ "ต้นทุน" ถ้าว่างแปลว่าคอลัมน์นี้ยังใช้ไม่ได้กับหุ้นนั้น</div>
     <div style="font-size:11px;color:#64748b;margin-bottom:6px;">🔒 = หุ้นที่ถืออยู่จริง ระบบเพิ่มให้อัตโนมัติ ลบแล้วจะเพิ่มกลับถ้ายังถือของอยู่ (ขายหมดจะหายเอง) — ถ้าอยากหยุดเฝ้าโดยไม่ลบ ใช้ปุ่ม 🟢/⚪ แทน ส่วนหุ้นที่กด + เพิ่มเอง ลบได้อิสระ ไว้ทดสอบ</div>
     <div id="wlBody"></div>
     <div style="border-top:1px solid #263449;margin:10px 0;"></div>
     <div style="font-size:12px;color:#94a3b8;margin-bottom:6px;">➕ เพิ่มหุ้นใหม่ (ไว้ทดสอบ/เฝ้าก่อนซื้อ)</div>
     <div class="row">
       <div class="grow"><input id="newSym" placeholder="เช่น AOT" style="text-transform:uppercase;"></div>
-      <div style="width:60px;"><input id="newDrop" type="number" value="60" title="บิดหาย%"></div>
-      <div style="width:60px;"><input id="newPriceDrop" type="number" step="0.1" value="1.0" title="ราคาตก%"></div>
-      <div style="width:60px;"><input id="newTrail" type="number" step="0.1" value="1.0" title="trailing%"></div>
+      <div style="width:54px;"><input id="newDrop" type="number" value="60" title="บิดหาย%"></div>
+      <div style="width:54px;"><input id="newPriceDrop" type="number" step="0.1" value="1.0" title="ราคาตก%"></div>
+      <div style="width:54px;"><input id="newTrail" type="number" step="0.1" value="1.0" title="trailing%"></div>
+      <div style="width:54px;"><input id="newCostStop" type="number" step="0.1" value="5.0" title="ขาดทุนจากต้นทุน%"></div>
       <button class="btn-buy" onclick="addSymbol()">➕</button>
     </div>
   </div>
@@ -1340,6 +1397,24 @@ function fillCancelForm(orderNo, symbol){
   document.getElementById('cancelOrderNo').value = orderNo || '';
   document.getElementById('cancelSymbol').value = symbol || '';
   document.getElementById('cancelOrderNo').scrollIntoView({behavior:'smooth', block:'center'});
+}
+
+async function checkStatus(){
+  const order_no = document.getElementById('cancelOrderNo').value.trim();
+  if(!order_no){ alert('ใส่ Order No ก่อน'); return; }
+  const box = document.getElementById('cancelResult');
+  box.style.display='';
+  box.textContent = 'กำลังเช็คสถานะ...';
+  try{
+    const res = await (await fetch('/api/order_status',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({order_no})})).json();
+    if(res.ok){
+      box.textContent = `📦 สถานะ #${order_no}\\nจับคู่แล้ว (matched): ${res.matched}\\nเหลือค้าง (balance): ${res.balance}\\nstatus: ${res.status} ${res.status_meaning?('('+res.status_meaning+')'):''}\\ncanCancel: ${res.can_cancel}`;
+    }else{
+      box.textContent = '❌ '+(res.msg||'เช็คสถานะไม่ได้');
+    }
+  }catch(e){
+    box.textContent = '❌ ส่งคำขอไม่สำเร็จ: '+e;
+  }
 }
 
 async function testCancel(){
@@ -1429,17 +1504,20 @@ async function refresh(){
       if(keys.length===0){
         wl.innerHTML='<div style="color:#64748b;font-size:13px;padding:4px 0;">ยังไม่มีหุ้นในรายการเฝ้า — ถ้าถือหุ้นอยู่จะเพิ่มให้อัตโนมัติ หรือกด + เพิ่มเองด้านล่างเพื่อทดสอบ</div>';
       } else {
-        let whtml='<table><tr><th>หุ้น</th><th>ถือ</th><th>บิดหาย%</th><th>ราคาตก%</th><th>Trail%</th><th>บน/ปิด</th><th></th></tr>';
+        let whtml='<table><tr><th>หุ้น</th><th>ถือ</th><th>ต้นทุน</th><th>บิดหาย%</th><th>ราคาตก%</th><th>Trail%</th><th>ขาดทุน%</th><th>บน/ปิด</th><th></th></tr>';
         for(const k of keys){
           const c=s.watchlist[k]||{};
           const held=(s.positions&&s.positions[k])||0;
+          const cost=(s.avg_cost&&s.avg_cost[k])||0;
           const autoTag=(!c.pinned && held>0)?' <span style="font-size:10px;color:#64748b;">🔒</span>':'';
           whtml+=`<tr class="wl-row">
             <td><b>${k}</b>${autoTag}</td>
             <td class="yellow mono">${held}</td>
+            <td class="mono" style="color:#64748b;">${cost?fmt(cost):'--'}</td>
             <td><input id="d_${k}" type="number" value="${c.bid_drop_pct}" onchange="updateRow('${k}')"></td>
             <td><input id="p_${k}" type="number" step="0.1" value="${c.price_drop_pct!=null?c.price_drop_pct:1.0}" onchange="updateRow('${k}')"></td>
             <td><input id="t_${k}" type="number" step="0.1" value="${c.trailing_pct}" onchange="updateRow('${k}')"></td>
+            <td><input id="c_${k}" type="number" step="0.1" value="${c.cost_stop_pct!=null?c.cost_stop_pct:5.0}" onchange="updateRow('${k}')"></td>
             <td><button class="${c.active?'btn-buy':'btn-ghost'}" onclick="toggleActive('${k}')">${c.active?'🟢':'⚪'}</button></td>
             <td><button class="btn-danger" onclick="askRemove('${k}')">🗑</button></td>
           </tr>`;
@@ -1484,20 +1562,20 @@ async function doOrder(){
 async function addSymbol(){
   const symbol=document.getElementById('newSym').value.trim().toUpperCase();
   if(!symbol){ alert('ใส่ชื่อหุ้น'); return; }
-  const body={symbol,bid_drop_pct:document.getElementById('newDrop').value,price_drop_pct:document.getElementById('newPriceDrop').value,trailing_pct:document.getElementById('newTrail').value};
+  const body={symbol,bid_drop_pct:document.getElementById('newDrop').value,price_drop_pct:document.getElementById('newPriceDrop').value,trailing_pct:document.getElementById('newTrail').value,cost_stop_pct:document.getElementById('newCostStop').value};
   const res=await (await fetch('/api/watchlist/add',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
   alert(res.ok?'✅ เพิ่ม '+symbol+' แล้ว':'❌ '+res.msg);
 }
 async function updateRow(sym){
   await fetch('/api/watchlist/update',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
-    symbol:sym,bid_drop_pct:document.getElementById('d_'+sym).value,price_drop_pct:document.getElementById('p_'+sym).value,trailing_pct:document.getElementById('t_'+sym).value,active:true
+    symbol:sym,bid_drop_pct:document.getElementById('d_'+sym).value,price_drop_pct:document.getElementById('p_'+sym).value,trailing_pct:document.getElementById('t_'+sym).value,cost_stop_pct:document.getElementById('c_'+sym).value,active:true
   })});
 }
 async function toggleActive(sym){
   const r=await (await fetch('/api/state')).json();
   const c=r.watchlist[sym]||{};
   await fetch('/api/watchlist/update',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
-    symbol:sym,bid_drop_pct:c.bid_drop_pct,price_drop_pct:c.price_drop_pct,trailing_pct:c.trailing_pct,active:!c.active
+    symbol:sym,bid_drop_pct:c.bid_drop_pct,price_drop_pct:c.price_drop_pct,trailing_pct:c.trailing_pct,cost_stop_pct:c.cost_stop_pct,active:!c.active
   })});
 }
 function askRemove(sym){
