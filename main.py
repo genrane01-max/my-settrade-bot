@@ -555,7 +555,7 @@ def _get_order_snapshot(order_no):
     if get_order is not None:
         item = None
         try:
-            item = get_order(order_no=order_no)
+            item = api_call_with_retry(query_bucket, get_order, order_no=order_no)
         except TypeError:
             try:
                 item = get_order(order_no)
@@ -563,6 +563,7 @@ def _get_order_snapshot(order_no):
                 logger.error(f"[chase-sell] get_order({order_no}) error: {e}")
         except Exception as e:
             logger.error(f"[chase-sell] get_order({order_no}) error: {e}")
+
         if isinstance(item, dict) and item:
             return _snapshot_from_item(item, order_no)
 
@@ -570,8 +571,9 @@ def _get_order_snapshot(order_no):
     get_orders = _resolve_orders_method()
     if get_orders is None:
         return None
+
     try:
-        raw = _call_flexible(get_orders, os.getenv("SETTRADE_ACCOUNT_N"))
+        raw = api_call_with_retry(query_bucket, _call_flexible, get_orders, os.getenv("SETTRADE_ACCOUNT_N"))
     except Exception as e:
         logger.error(f"[chase-sell] get_orders error: {e}")
         return None
