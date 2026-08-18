@@ -653,7 +653,7 @@ def _cancel_order(order_no, symbol, pin):
     while True:
         attempt += 1
         try:
-            resp = cancel_fn(order_no=order_no, pin=pin)
+            resp = api_call_with_retry(order_bucket, cancel_fn, order_no=order_no, pin=pin)
             logger.info(f"🚫 [chase-sell] ยกเลิกคำสั่ง {symbol} #{order_no} → {resp}")
             return True
         except Exception as e:
