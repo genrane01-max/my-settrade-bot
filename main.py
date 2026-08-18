@@ -428,6 +428,7 @@ def _extract_order_no(resp):
 def place_order(side, symbol, volume, pin, price_type="MP-MTL", price=0.0):
     price_type = price_type or "MP-MTL"
     use_price = float(price) if price_type == "Limit" else 0.0
+
     entry = {
         "time": get_bkk_now().strftime("%H:%M:%S"),
         "side": side,
@@ -439,13 +440,17 @@ def place_order(side, symbol, volume, pin, price_type="MP-MTL", price=0.0):
         "msg": "",
         "order_no": None,
     }
+
     if equity is None:
         entry["ok"] = False
         entry["msg"] = "ยังไม่ได้เชื่อมต่อ Settrade"
         _record_order(entry)
         return {"ok": False, "msg": entry["msg"], "order_no": None}
+
     try:
-        resp = equity.place_order(
+        resp = api_call_with_retry(
+            order_bucket,
+            equity.place_order,
             side=side,
             symbol=symbol.upper().strip(),
             trustee_id_type=os.getenv("SETTRADE_TRUSTEE_ID", "Local"),
@@ -460,6 +465,7 @@ def place_order(side, symbol, volume, pin, price_type="MP-MTL", price=0.0):
         msg = f"📤 {side} {symbol} {volume}{price_note} ({price_type})\nตอบ: {resp}"
         logger.info(msg)
         send_telegram(msg)
+
         entry["ok"] = True
         entry["msg"] = str(resp)
         entry["order_no"] = order_no
