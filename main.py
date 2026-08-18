@@ -1379,7 +1379,16 @@ let modalConfirmFn=null;
 let pendingRemoveSym=null;
 let userTypingSymbol=false;
 let wlFocusedId=null;
+let wlEditedAt={};
+let wlActiveCache={};
 const fmt=n=>n==null||n===0?'--':Number(n).toLocaleString('en-US');
+function wlVal(id, fallback){
+  if(wlEditedAt[id] && (Date.now()-wlEditedAt[id] < 4000)){
+    const el=document.getElementById(id);
+    if(el) return el.value;
+  }
+  return fallback;
+}
 
 document.addEventListener('DOMContentLoaded', ()=>{
   const el = document.getElementById('tradeSymbol');
@@ -1516,14 +1525,15 @@ async function refresh(){
           const held=(s.positions&&s.positions[k])||0;
           const cost=(s.avg_cost&&s.avg_cost[k])||0;
           const autoTag=(!c.pinned && held>0)?' <span style="font-size:10px;color:#64748b;">🔒</span>':'';
+          wlActiveCache[k]=!!c.active;
           whtml+=`<tr class="wl-row">
             <td><b>${k}</b>${autoTag}</td>
             <td class="yellow mono">${held}</td>
             <td class="mono" style="color:#64748b;">${cost?fmt(cost):'--'}</td>
-            <td><input id="d_${k}" type="number" value="${c.bid_drop_pct}" onchange="updateRow('${k}')"></td>
-            <td><input id="p_${k}" type="number" step="0.1" value="${c.price_drop_pct!=null?c.price_drop_pct:1.0}" onchange="updateRow('${k}')"></td>
-            <td><input id="t_${k}" type="number" step="0.1" value="${c.trailing_pct}" onchange="updateRow('${k}')"></td>
-            <td><input id="c_${k}" type="number" step="0.1" value="${c.cost_stop_pct!=null?c.cost_stop_pct:5.0}" onchange="updateRow('${k}')"></td>
+            <td><input id="d_${k}" type="number" value="${wlVal('d_'+k, c.bid_drop_pct)}" onchange="updateRow('${k}')"></td>
+            <td><input id="p_${k}" type="number" step="0.1" value="${wlVal('p_'+k, c.price_drop_pct!=null?c.price_drop_pct:1.0)}" onchange="updateRow('${k}')"></td>
+            <td><input id="t_${k}" type="number" step="0.1" value="${wlVal('t_'+k, c.trailing_pct)}" onchange="updateRow('${k}')"></td>
+            <td><input id="c_${k}" type="number" step="0.1" value="${wlVal('c_'+k, c.cost_stop_pct!=null?c.cost_stop_pct:1.0)}" onchange="updateRow('${k}')"></td>
             <td><button class="${c.active?'btn-buy':'btn-ghost'}" onclick="toggleActive('${k}')">${c.active?'🟢':'⚪'}</button></td>
             <td><button class="btn-danger" onclick="askRemove('${k}')">🗑</button></td>
           </tr>`;
@@ -1573,9 +1583,19 @@ async function addSymbol(){
   alert(res.ok?'✅ เพิ่ม '+symbol+' แล้ว':'❌ '+res.msg);
 }
 async function updateRow(sym){
-  await fetch('/api/watchlist/update',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
-    symbol:sym,bid_drop_pct:document.getElementById('d_'+sym).value,price_drop_pct:document.getElementById('p_'+sym).value,trailing_pct:document.getElementById('t_'+sym).value,cost_stop_pct:document.getElementById('c_'+sym).value,active:true
-  })});
+  const now=Date.now();
+  ['d_','p_','t_','c_'].forEach(pfx=>{ wlEditedAt[pfx+sym]=now; });
+  const activeState = wlActiveCache[sym]!==false;
+  try{
+    const res = await (await fetch('/api/watchlist/update',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
+      symbol:sym,bid_drop_pct:document.getElementById('d_'+sym).value,price_drop_pct:document.getElementById('p_'+sym).value,trailing_pct:document.getElementById('t_'+sym).value,cost_stop_pct:document.getElementById('c_'+sym).value,active:activeState
+    })})).json();
+    if(!res.ok){
+      alert('❌ บันทึกไม่สำเร็จ: '+(res.msg||'ไม่ทราบสาเหตุ — ลองใหม่อีกครั้ง หรือดู Render logs'));
+    }
+  }catch(e){
+    alert('❌ ส่งคำขอบันทึกไม่สำเร็จ (เน็ตหลุด/เซิร์ฟเวอร์ไม่ตอบ): '+e);
+  }
 }
 async function toggleActive(sym){
   const r=await (await fetch('/api/state')).json();
