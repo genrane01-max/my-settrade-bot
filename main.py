@@ -1,27 +1,23 @@
 # ==============================================================================
-# SETTRADE BOT v2.14 — Watchlist หลายหุ้น + Trailing % + เทรด MP-MTL/Limit + Chase-sell
+# SETTRADE BOT v2.16 — Watchlist หลายหุ้น + Trailing % + เทรด MP-MTL/Limit + Chase-sell
 #   + Cost-basis stop-loss + Manual order-status/cancel test tool
-# (ดู comment เวอร์ชันก่อนหน้าในไฟล์ v2.13 สำหรับรายละเอียด v2.1-v2.13 ทั้งหมด)
+# (ดู comment เวอร์ชันก่อนหน้าในไฟล์ v2.13/v2.14/v2.15 สำหรับรายละเอียดทั้งหมด)
 #
-# v2.14 — วิเคราะห์จาก log จริงที่ได้จาก SANDBOX (place_order สำเร็จของ KTB):
-#   1) ยืนยัน field name orderNo/matched/balance/vol ถูกต้อง 100% จาก response จริง
-#      (ไม่ต้องแก้ _extract_order_no / _get_order_snapshot อีก — ของเดิมถูกอยู่แล้ว)
-#   2) เจอเบาะแสสำคัญสำหรับปัญหา "Invalid Order state" ที่ค้างมาตั้งแต่ v2.13: response
-#      จริงตอนเพิ่งส่งคำสั่งโชว์ 'status': 'S' ('New order sent to SETTRADE from investor'),
-#      'canCancel': False — แปลว่าออเดอร์มีช่วงสั้นๆ หลังส่งที่ยังยกเลิกไม่ได้จริง (รอ
-#      SETTRADE/ตลาดประมวลผลก่อน) ถ้า chase-sell ไปยิง cancel ในช่วงนี้พอดีจะโดน error นี้
-#      → เพิ่ม retry เฉพาะเจาะจงกับ error message ที่มีคำว่า "Invalid Order state"/SEOSGW-01
-#      เท่านั้น (ไม่ retry error ประเภทอื่น เช่น PIN ผิดรูปแบบ เพราะ retry ไปก็ไม่มีทางสำเร็จ)
-#      ลองใหม่ไม่เกิน CANCEL_STATE_RETRY_MAX ครั้ง เว้นระยะ CANCEL_STATE_RETRY_DELAY วิ
-#   3) เพิ่ม log แสดง canCancel ชัดๆ ก่อนตัดสินใจยกเลิกทุกครั้งใน chase-sell (ไม่ต้องเดา/
-#      ไปขุด log อื่นมาประกอบทีหลังอีก)
-#   ⚠️ SANDBOX อาจไม่มี matching engine จริงประมวลผลออเดอร์ให้พ้นสถานะ 'S' เลย (ไม่เหมือน
-#   ALGO ที่จะประมวลผลจริง) ถ้า retry แล้วยัง "Invalid Order state" อยู่ดีทุกครั้งใน SANDBOX
-#   อาจเป็นข้อจำกัดของ SANDBOX เองที่ทดสอบเรื่องนี้ให้จบไม่ได้ ต้องทดสอบกับ ALGO จริง
-#   (จำนวนหุ้นน้อยๆ) ถึงจะฟันธงได้ 100% ว่า retry นี้แก้ปัญหาจริงหรือไม่
-#
-# v2.15 — ปรับความไวของ chase-sell (poll/retry ถี่ขึ้น) + แก้ปุ่มเปิดปิด/ลบใน watchlist
-#   ล้นออกนอกการ์ดบนมือถือจอแคบ (ห่อ table ด้วย scroll container แทนการปล่อยล้น)
+# v2.16 — แก้ตาม "เอกสาร SDK ทางการ" ที่ยืนยัน signature จริงแล้ว (ไม่ต้องเดาอีกต่อไป):
+#   1) cancel_order: เอกสารยืนยันชัดเจนว่าเรียกด้วย keyword args เท่านั้น
+#        equity.cancel_order(order_no="AB123456", pin="Your PIN")
+#      → ไม่ต้องส่ง account_no และไม่ต้องมี attempts-list เดา 6 แบบเหมือนเดิมอีกแล้ว
+#      (v2.14/v2.15 ยังเดาอยู่เพราะตอนนั้นแค่ "ยืนยันจาก log สำเร็จ" ไม่ใช่จากเอกสาร)
+#      ตัด _call_cancel_flexible() ออก เหลือแค่เรียก signature เดียวตรงๆ
+#      ยังคง retry เฉพาะ error "Invalid Order state"/SEOSGW-01 ไว้เหมือน v2.14 (ของเดิมถูกแล้ว)
+#   2) get_order (เอกพจน์!): เอกสารมี equity.get_order(order_no="...") ที่คืน dict ออเดอร์
+#      เดียวตรงๆ ครบทุก field ที่ chase-sell ต้องใช้ (matched/balance/canCancel/status/
+#      showOrderStatusMeaning) → เปลี่ยน _get_order_snapshot ให้ใช้ get_order ก่อนเป็นทางหลัก
+#      (เร็วกว่า ชัวร์กว่า ไม่ต้องดึง get_orders() ทั้งลิสต์มากรองเอาเหมือนเดิม)
+#      ยังคง fallback ไป get_orders() (ทั้งลิสต์) ไว้เผื่อ SDK เวอร์ชันเก่าไม่มี get_order
+#   3) _cancel_order_manual_test ก็ปรับตาม — ลอง signature ตามเอกสารก่อนเป็นอันดับแรก
+#      เครื่องมือนี้ยังมีประโยชน์อยู่ (เช็คว่า SDK เวอร์ชันที่ deploy จริงตรงเอกสารไหม / เช็ค
+#      business-logic error เช่น canCancel=False) แต่ไม่ต้องเดา positional-order เยอะแบบเดิมแล้ว
 # ==============================================================================
 
 import os
@@ -62,6 +58,8 @@ state = {
 }
 subscribed = set()
 _last_trading_date = None
+_last_watchlist_load = 0
+WATCHLIST_LOAD_INTERVAL = 10  # วิ — throttle การอ่าน watchlist จาก Firebase
 
 DEFAULT_CFG = {
     "bid_drop_pct": 60.0, "trailing_pct": 1.0, "price_drop_pct": 1.0,
@@ -452,16 +450,75 @@ def place_order_async(side, symbol, volume, pin, price_type="MP-MTL", price=0.0,
 
 # ===================== ไล่ราคาขายอัตโนมัติ (chase-sell) =====================
 
-def _resolve_orders_method():
+def _resolve_single_order_method():
+    """
+    v2.16: เอกสาร SDK ยืนยันว่ามี equity.get_order(order_no="...") คืน dict ออเดอร์เดียว
+    ตรงๆ (มี matched/balance/canCancel/status/showOrderStatusMeaning ครบ) — ใช้เป็นทางหลัก
+    เร็วกว่าและชัวร์กว่าการดึง get_orders() ทั้งลิสต์มากรองเอาแบบเดิม
+    """
     return _resolve_method(
         equity,
-        ["get_orders", "get_order_list", "list_orders", "orders", "get_order"],
-        "get_orders (chase-sell)",
+        ["get_order", "get_order_info", "getOrder"],
+        "get_order (chase-sell)",
     )
 
+def _resolve_orders_method():
+    """สำรอง — ใช้เฉพาะกรณี SDK เวอร์ชันนั้นไม่มี get_order (เอกพจน์)"""
+    return _resolve_method(
+        equity,
+        ["get_orders", "get_order_list", "list_orders", "orders"],
+        "get_orders (chase-sell fallback)",
+    )
+
+def _snapshot_from_item(item, order_no):
+    matched = 0
+    for k in ("matched", "matchedVolume", "matched_volume", "filledVolume", "filled_volume", "cumExecQty", "matchQty"):
+        if item.get(k) is not None:
+            matched = int(item.get(k) or 0)
+            break
+    balance = None
+    for k in ("balance", "balanceVolume", "balance_volume", "remainingVolume", "remaining_volume", "leavesQty", "leaveVolume"):
+        if item.get(k) is not None:
+            balance = int(item.get(k) or 0)
+            break
+    if balance is None:
+        total_vol = item.get("vol") or item.get("volume") or item.get("totalVolume") or item.get("qty") or 0
+        balance = max(0, int(total_vol or 0) - matched)
+    status = item.get("status") or item.get("orderStatus") or ""
+    status_meaning = item.get("showOrderStatusMeaning") or item.get("showOrderStatus") or ""
+    can_cancel = item.get("canCancel")
+    logger.info(
+        f"[chase-sell] #{order_no} snapshot: matched={matched} balance={balance} "
+        f"status={status} ({status_meaning}) canCancel={can_cancel}"
+    )
+    return {
+        "matched": matched, "balance": balance, "status": status,
+        "status_meaning": status_meaning, "can_cancel": can_cancel, "raw": item,
+    }
+
 def _get_order_snapshot(order_no):
+    if equity is None:
+        return None
+
+    # ทางหลัก (v2.16): get_order(order_no=...) ตามเอกสาร SDK — คืนออเดอร์เดียวตรงๆ ไม่ต้องกรอง
+    get_order = _resolve_single_order_method()
+    if get_order is not None:
+        item = None
+        try:
+            item = get_order(order_no=order_no)
+        except TypeError:
+            try:
+                item = get_order(order_no)
+            except Exception as e:
+                logger.error(f"[chase-sell] get_order({order_no}) error: {e}")
+        except Exception as e:
+            logger.error(f"[chase-sell] get_order({order_no}) error: {e}")
+        if isinstance(item, dict) and item:
+            return _snapshot_from_item(item, order_no)
+
+    # สำรอง: SDK เวอร์ชันเก่า/ไม่มี get_order → ดึง get_orders() ทั้งลิสต์มากรองแทน
     get_orders = _resolve_orders_method()
-    if get_orders is None or equity is None:
+    if get_orders is None:
         return None
     try:
         raw = _call_flexible(get_orders, os.getenv("SETTRADE_ACCOUNT_N"))
@@ -490,34 +547,11 @@ def _get_order_snapshot(order_no):
                 break
         if item_no is None or str(item_no) != str(order_no):
             continue
-        matched = 0
-        for k in ("matched", "matchedVolume", "matched_volume", "filledVolume", "filled_volume", "cumExecQty", "matchQty"):
-            if item.get(k) is not None:
-                matched = int(item.get(k) or 0)
-                break
-        balance = None
-        for k in ("balance", "balanceVolume", "balance_volume", "remainingVolume", "remaining_volume", "leavesQty", "leaveVolume"):
-            if item.get(k) is not None:
-                balance = int(item.get(k) or 0)
-                break
-        if balance is None:
-            total_vol = item.get("vol") or item.get("volume") or item.get("totalVolume") or item.get("qty") or 0
-            balance = max(0, int(total_vol or 0) - matched)
-        status = item.get("status") or item.get("orderStatus") or ""
-        status_meaning = item.get("showOrderStatusMeaning") or item.get("showOrderStatus") or ""
-        can_cancel = item.get("canCancel")
-        logger.info(
-            f"[chase-sell] #{order_no} snapshot: matched={matched} balance={balance} "
-            f"status={status} ({status_meaning}) canCancel={can_cancel}"
-        )
-        return {
-            "matched": matched, "balance": balance, "status": status,
-            "status_meaning": status_meaning, "can_cancel": can_cancel, "raw": item,
-        }
+        return _snapshot_from_item(item, order_no)
 
     logger.warning(
-        f"[chase-sell] หา order_no={order_no} ไม่เจอใน get_orders ผลลัพธ์ — อาจ field ชื่อไม่ตรง "
-        f"raw ตัวอย่างแรก: {str(items[0])[:300] if items else '(ว่าง)'}"
+        f"[chase-sell] หา order_no={order_no} ไม่เจอ ทั้งจาก get_order และ get_orders — "
+        f"ตัวอย่าง raw แรกจาก get_orders: {str(items[0])[:300] if items else '(ว่าง)'}"
     )
     return None
 
@@ -552,44 +586,24 @@ def _poll_order_until_settled(order_no, timeout, interval):
         elapsed += interval
     return last
 
-def _call_cancel_flexible(cancel_fn, order_no, pin, account_no):
-    attempts = [
-        lambda: cancel_fn(order_no, pin),  # ยืนยันแล้วว่า SDK รับ (SEOSGW-08/SEOSGW-01 ไม่ใช่ TypeError)
-        lambda: cancel_fn(order_no=order_no, pin=pin),
-        lambda: cancel_fn(order_no=order_no, account_no=account_no, pin=pin),
-        lambda: cancel_fn(account_no=account_no, order_no=order_no, pin=pin),
-        lambda: cancel_fn(order_no, account_no, pin),
-        lambda: cancel_fn(account_no, order_no, pin),
-    ]
-    last_type_error = None
-    for attempt in attempts:
-        try:
-            return attempt()
-        except TypeError as e:
-            last_type_error = e
-            continue
-    raise last_type_error
-
 def _cancel_order(order_no, symbol, pin):
     """
-    v2.14: เพิ่ม retry เฉพาะกรณี error มีคำว่า "Invalid Order state" (SEOSGW-01) — พบจาก log
-    จริงว่า canCancel=False ทันทีหลังส่งคำสั่งใหม่ (status 'S' = เพิ่งส่งไปยังไม่ถูกประมวลผล)
-    ลองใหม่สั้นๆ ไม่เกิน CANCEL_STATE_RETRY_MAX ครั้ง เว้น CANCEL_STATE_RETRY_DELAY วิ ก่อนยอมแพ้
-    ไม่ retry error ประเภทอื่น (เช่น PIN ผิดรูปแบบ) เพราะไม่มีทางสำเร็จไม่ว่าลองกี่ครั้งก็ตาม
+    v2.16: ใช้ signature ที่เอกสาร SDK ยืนยันตรงๆ — equity.cancel_order(order_no=..., pin=...)
+    (keyword args เท่านั้น ไม่ต้องส่ง account_no และไม่ต้องเดา positional/แบบอื่นอีกต่อไป)
+    ยังคง retry เฉพาะกรณี error "Invalid Order state" (SEOSGW-01) เหมือน v2.14 — ดูคอมเมนต์หัวไฟล์
+    (canCancel มักเป็น False ทันทีหลังส่งคำสั่งใหม่ เพราะยังรอ SETTRADE ประมวลผลอยู่)
     """
-    cancel_fn = _resolve_method(
-        equity,
-        ["cancel_order", "cancelOrder", "place_cancellation", "cancel"],
-        "cancel_order (chase-sell)",
-    )
-    if cancel_fn is None or equity is None:
+    if equity is None:
         return False
-    account_no = os.getenv("SETTRADE_ACCOUNT_N")
+    cancel_fn = _resolve_method(equity, ["cancel_order", "cancelOrder"], "cancel_order (chase-sell)")
+    if cancel_fn is None:
+        return False
+
     attempt = 0
     while True:
         attempt += 1
         try:
-            resp = _call_cancel_flexible(cancel_fn, order_no, pin, account_no)
+            resp = cancel_fn(order_no=order_no, pin=pin)
             logger.info(f"🚫 [chase-sell] ยกเลิกคำสั่ง {symbol} #{order_no} → {resp}")
             return True
         except Exception as e:
@@ -607,30 +621,22 @@ def _cancel_order(order_no, symbol, pin):
             return False
 
 def _cancel_order_manual_test(order_no, pin, symbol=""):
-    cancel_fn = _resolve_method(
-        equity,
-        ["cancel_order", "cancelOrder", "place_cancellation", "cancel"],
-        "cancel_order (manual test)",
-    )
+    """
+    v2.16: เอกสาร SDK ยืนยัน signature ที่ถูกต้องแล้วคือ equity.cancel_order(order_no=..., pin=...)
+    เครื่องมือนี้จึงลองแบบนั้นก่อนเป็นหลัก แล้วค่อย fallback แบบ positional เผื่อ SDK เวอร์ชันเก่า
+    ยังมีประโยชน์อยู่สำหรับเช็ค business-logic error เช่น canCancel=False / PIN ผิดรูปแบบ
+    """
+    cancel_fn = _resolve_method(equity, ["cancel_order", "cancelOrder"], "cancel_order (manual test)")
     if cancel_fn is None or equity is None:
         return {
             "ok": False,
-            "msg": "ไม่พบ method cancel ใน SDK (ดู Render log หา '❗ [cancel_order (manual test)]' "
+            "msg": "ไม่พบ method cancel_order ใน SDK (ดู Render log หา '❗ [cancel_order (manual test)]' "
                    "เพื่อดูรายชื่อ method จริงที่มีอยู่)",
         }
 
-    account_no = os.getenv("SETTRADE_ACCOUNT_N")
     attempts = [
-        ("cancel_fn(order_no, pin)  [ยืนยันแล้วว่า SDK รับ]", lambda: cancel_fn(order_no, pin)),
-        ("cancel_fn(order_no, pin=pin)", lambda: cancel_fn(order_no, pin=pin)),
-        ("cancel_fn(order_no=order_no, pin=pin)", lambda: cancel_fn(order_no=order_no, pin=pin)),
-        ("cancel_fn(pin=pin, order_no=order_no)", lambda: cancel_fn(pin=pin, order_no=order_no)),
-        ("cancel_fn(account_no, order_no, pin)", lambda: cancel_fn(account_no, order_no, pin)),
-        (
-            "cancel_fn(account_no=account_no, order_no=order_no, pin=pin)",
-            lambda: cancel_fn(account_no=account_no, order_no=order_no, pin=pin),
-        ),
-        ("cancel_fn(order_no)  [เผื่อไม่ต้อง pin เลย]", lambda: cancel_fn(order_no)),
+        ("cancel_order(order_no=order_no, pin=pin)  [ตามเอกสาร SDK]", lambda: cancel_fn(order_no=order_no, pin=pin)),
+        ("cancel_order(order_no, pin)  [positional สำรอง]", lambda: cancel_fn(order_no, pin)),
     ]
 
     tried = []
@@ -638,7 +644,7 @@ def _cancel_order_manual_test(order_no, pin, symbol=""):
         logger.info(f"🧪 [manual-cancel] {symbol} #{order_no} กำลังลอง: {desc}")
         try:
             resp = fn()
-            msg = f"✅ [manual-cancel] {symbol} #{order_no} SDK รับ signature นี้โดยไม่ error: {desc}\nตอบ: {resp}"
+            msg = f"✅ [manual-cancel] {symbol} #{order_no} สำเร็จด้วย: {desc}\nตอบ: {resp}"
             logger.info(msg)
             send_telegram(msg)
             return {"ok": True, "signature": desc, "response": str(resp), "tried_before": tried}
@@ -652,8 +658,8 @@ def _cancel_order_manual_test(order_no, pin, symbol=""):
             msg = (
                 f"🧪 [manual-cancel] {symbol} #{order_no} ลองแล้ว: {desc}\n"
                 f"SDK รับ signature นี้ (ไม่ใช่ TypeError) แต่ error ระดับ business logic: {err}\n"
-                f"↳ นี่น่าจะเป็น signature ที่ถูกต้อง แค่ order นี้ยกเลิกไม่ได้ด้วยเหตุผลอื่น "
-                f"(เช่น canCancel=False ตอนนี้, PIN ผิดรูปแบบ/ผิด, order match ไปแล้ว) — ลองกด "
+                f"↳ นี่คือ signature ที่ถูกต้องตามเอกสาร แค่ order นี้ยกเลิกไม่ได้ด้วยเหตุผลอื่น "
+                f"(เช่น canCancel=False ตอนนี้, PIN ผิด, order match ไปแล้ว) — ลองกด "
                 f"'🔍 เช็คสถานะ' ก่อนเพื่อดู canCancel/status จริงของออเดอร์นี้"
             )
             logger.error(msg)
@@ -982,7 +988,7 @@ def new_trading_day_reset():
     logger.info("📅 เข้าสู่วันเทรดใหม่ → รีเซ็ต baseline บิดหาย%/ราคาตก% และบังคับ subscribe ใหม่")
 
 def bot_loop():
-    global _last_trading_date
+    global _last_trading_date, _last_watchlist_load
     while True:
         try:
             today = get_bkk_date()
@@ -990,14 +996,17 @@ def bot_loop():
                 new_trading_day_reset()
                 _last_trading_date = today
 
-            wl = load_watchlist()
-            if wl is not None:
-                with lock:
-                    state["watchlist"] = wl
-                    for sym in wl:
-                        if sym not in state["symbols"]:
-                            h, st = load_trailing(sym)
-                            state["symbols"][sym] = {"highest": h, "stop": st}
+            now_ts = time.time()
+            if now_ts - _last_watchlist_load >= WATCHLIST_LOAD_INTERVAL:
+                wl = load_watchlist()
+                if wl is not None:
+                    with lock:
+                        state["watchlist"] = wl
+                        for sym in wl:
+                            if sym not in state["symbols"]:
+                                h, st = load_trailing(sym)
+                                state["symbols"][sym] = {"highest": h, "stop": st}
+                _last_watchlist_load = now_ts
 
             with lock:
                 active_syms = [s for s, c in state["watchlist"].items() if c.get("active", True)]
