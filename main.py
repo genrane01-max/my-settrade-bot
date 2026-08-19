@@ -1582,6 +1582,27 @@ HTML = """<!DOCTYPE html>
     <div class="log" id="actionLog" style="margin-top:10px;">รอข้อมูล...</div>
   </div>
 
+  <!-- โซน 2: เลือกหุ้น + จอบิด/ออฟเฟอร์ -->
+  <div class="card">
+    <div class="row">
+      <div class="grow">
+        <label>เลือกหุ้นดูจอ</label>
+        <select id="selSymbol" onchange="selectSymbol()"></select>
+      </div>
+      <div style="text-align:right;font-size:13px;">
+        <div>ถือ: <span id="posTxt" class="yellow mono">0</span> หุ้น</div>
+        <div>สูงสุด: <span id="highestTxt" class="yellow mono">--</span></div>
+        <div>จุดขาย: <span id="stopTxt" class="green mono">--</span></div>
+        <div>บิดหาย: <span id="dropTxt" class="red mono">0%</span></div>
+      </div>
+    </div>
+    <div class="price red mono" id="priceTxt" style="margin:8px 0;">--</div>
+    <table style="width:100%;">
+      <tr><th>วอลุ่ม</th><th>บิด</th><th style="width:30px;"></th><th>ออฟเฟอร์</th><th>วอลุ่ม</th></tr>
+      <tbody id="bookBody"><tr><td colspan="5" style="color:#64748b;">กำลังโหลด...</td></tr></tbody>
+    </table>
+  </div>
+
  <!-- โซน 4: Watchlist -->
   <div class="card">
     <div style="font-weight:bold;margin-bottom:8px;">📋 รายการเฝ้า (Watchlist)</div>
@@ -1632,27 +1653,6 @@ HTML = """<!DOCTYPE html>
 <tbody id="tvBody"><tr><td colspan="4" style="color:#64748b;">กำลังโหลด...</td></tr></tbody>
 </table>
 </div>
-
-  <!-- โซน 2: เลือกหุ้น + จอบิด/ออฟเฟอร์ -->
-  <div class="card">
-    <div class="row">
-      <div class="grow">
-        <label>เลือกหุ้นดูจอ</label>
-        <select id="selSymbol" onchange="selectSymbol()"></select>
-      </div>
-      <div style="text-align:right;font-size:13px;">
-        <div>ถือ: <span id="posTxt" class="yellow mono">0</span> หุ้น</div>
-        <div>สูงสุด: <span id="highestTxt" class="yellow mono">--</span></div>
-        <div>จุดขาย: <span id="stopTxt" class="green mono">--</span></div>
-        <div>บิดหาย: <span id="dropTxt" class="red mono">0%</span></div>
-      </div>
-    </div>
-    <div class="price red mono" id="priceTxt" style="margin:8px 0;">--</div>
-    <table style="width:100%;">
-      <tr><th>วอลุ่ม</th><th>บิด</th><th style="width:30px;"></th><th>ออฟเฟอร์</th><th>วอลุ่ม</th></tr>
-      <tbody id="bookBody"><tr><td colspan="5" style="color:#64748b;">กำลังโหลด...</td></tr></tbody>
-    </table>
-  </div>
 
   <!-- โซน 3: เทรดด่วน -->
   <div class="card">
