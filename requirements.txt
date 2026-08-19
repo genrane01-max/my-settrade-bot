@@ -1,3 +1,4 @@
 requests
 firebase-admin
 settrade-v2==2.2.1
+certifi
