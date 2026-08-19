@@ -297,18 +297,29 @@ def send_telegram_async(message):
 # ===================== SETTRADE =====================
 def init_settrade():
     global investor, equity
+    # สร้าง config ของ SDK ให้อัตโนมัติ (สำคัญ: บอก environment ตลาดจริง/จำลอง)
+    try:
+        import pathlib
+        cfg = pathlib.Path.home() / "settradesdkv2_config.txt"
+        sdk_env = os.getenv("SETTRADE_ENV", "uat")  # uat=จำลอง (ปลอดภัย) / prod=จริง
+        cfg.write_text(f"environment={sdk_env}\nclear_log=30\n", encoding="utf-8")
+    except Exception as e:
+        logger.warning(f"config SDK เขียนไม่สำเร็จ: {e}")
+
     app_id = os.getenv("SETTRADE_APP_ID")
     app_secret = os.getenv("SETTRADE_APP_SECRET")
     broker_id = os.getenv("SETTRADE_BROKER_ID")
     app_code = os.getenv("SETTRADE_APP_CODE", "SANDBOX")
     account_no = os.getenv("SETTRADE_ACCOUNT_N")
+
     if not app_id or not app_secret:
         logger.warning("ยังไม่มี SETTRADE_APP_ID/SECRET — ต้องรอ key จากโบรกเกอร์ถึงจะเชื่อมตลาด")
         return False
+
     try:
         investor = Investor(app_id=app_id, app_secret=app_secret,
                             broker_id=broker_id, app_code=app_code,
-                            is_auto_queue=True)   # ← เพิ่มบรรทัดนี้
+                            is_auto_queue=True)
         equity = investor.Equity(account_no=account_no)
         with lock:
             state["connected"] = True
