@@ -1066,9 +1066,15 @@ def on_price_info(symbol, msg):
     try:
         if TICK_LOG_ENABLED:
             logger.info(f"📥 tick price เข้า {symbol}: {msg}")
+        data = msg.get("data") if isinstance(msg, dict) else {}
+        last = 0.0
+        if isinstance(data, dict):
+            last = data.get("last") or data.get("price") or 0.0
+        if not last:
+            last = msg.get("last", 0.0) or msg.get("price", 0.0)
         with lock:
             s = state["symbols"].setdefault(symbol, {})
-            s["last_price"] = msg.get("last", 0.0) or msg.get("price", 0.0)
+            s["last_price"] = last
         _check_symbol_and_maybe_sell(symbol, tick_ts=tick_ts)
     except Exception as e:
         logger.error(f"on_price_info error: {e}")
