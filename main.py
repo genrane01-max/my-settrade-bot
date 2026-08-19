@@ -428,13 +428,13 @@ def refresh_positions(force=False):
             if not list_is_genuinely_empty:
                 logger.warning(f"[get_portfolio] ได้ raw data กลับมาแต่แปลงเป็น position ไม่ได้: {str(raw)[:500]}")
 
-        with lock:
-            state["positions"] = pos
-            state["avg_cost"] = avg_cost
-            state["pos_updated"] = now
-        refresh_account_summary()
-    except Exception as e:
-        logger.error(f"get_portfolio error: {e}")
+        with lock:                                      # เยื้อง 8
+            state["positions"] = pos                    # เยื้อง 12
+            state["avg_cost"] = avg_cost                # เยื้อง 12
+            state["pos_updated"] = now                  # เยื้อง 12
+        refresh_account_summary()                       # เยื้อง 8 ← ต้องอยู่ตรงนี้!
+    except Exception as e:                              # เยื้อง 4
+        logger.error(f"get_portfolio error: {e}")       # เยื้อง 8
         
 def refresh_account_summary():
     """ดึงเงินสด + กำไร/ขาดทุนรวม + มูลค่าพอร์ต มาเก็บใน state (สำหรับแสดงบน dashboard)"""
