@@ -1623,6 +1623,12 @@ HTML = """<!DOCTYPE html>
     </div>
   </div>
 
+  <!-- โซน 3.7: พอร์ตปัจจุบัน (ดิบๆ ไม่ผ่านการกรอง) -->
+  <div class="card">
+    <div style="font-weight:bold;margin-bottom:8px;">💼 พอร์ตปัจจุบัน (จาก Settrade ตรงๆ)</div>
+    <div id="portBody" style="font-size:13px;color:#94a3b8;">กำลังโหลด...</div>
+  </div>
+
 <!-- โซน 1.5: สรุปพอร์ต -->
 <div class="card">
 <div style="font-weight:bold;margin-bottom:10px;">💰 สรุปพอร์ต</div>
