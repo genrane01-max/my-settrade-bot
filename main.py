@@ -434,6 +434,36 @@ def refresh_positions(force=False):
             state["pos_updated"] = now
     except Exception as e:
         logger.error(f"get_portfolio error: {e}")
+        
+def refresh_account_summary():
+    """ดึงเงินสด + กำไร/ขาดทุนรวม + มูลค่าพอร์ต มาเก็บใน state (สำหรับแสดงบน dashboard)"""
+    try:
+        if equity is None:
+            return
+        acct = api_call_with_retry(query_bucket, equity.get_account_info)
+        cash = 0.0
+        if isinstance(acct, dict):
+            d = acct.get("data", acct)
+            cash = d.get("cashBalance") or d.get("cash") or 0.0
+        port = api_call_with_retry(query_bucket, equity.get_portfolios)
+        pnl = 0.0
+        mv = 0.0
+        if isinstance(port, dict):
+            tot = port.get("totalPortfolio", {})
+            if tot:
+                pnl = tot.get("profit") or 0.0
+                mv = tot.get("marketValue") or 0.0
+            else:
+                for it in port.get("portfolioList", []):
+                    pnl += it.get("profit") or 0.0
+                    mv += it.get("marketValue") or 0.0
+        with lock:
+            state["cash"] = cash
+            state["pnl"] = pnl
+            state["market_value"] = mv
+            state["acct_updated"] = time.time()
+    except Exception as e:
+        logger.error(f"refresh_account_summary error: {e}")
 
 def sync_watchlist_with_portfolio():
     with lock:
