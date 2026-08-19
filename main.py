@@ -1605,6 +1605,18 @@ HTML = """<!DOCTYPE html>
 </div>
 </div>
 
+<!-- 🔥 หุ้นวอลุ่มสูง -->
+<div class="card">
+<div class="row" style="margin-bottom:8px;">
+<div style="font-weight:bold;" class="grow">🔥 หุ้นวอลุ่มสูง</div>
+<button class="btn-info" style="padding:6px 12px;font-size:13px;width:auto;" onclick="loadTopVolume(true)">🔄 รีเฟรช</button>
+</div>
+<table style="width:100%;">
+<thead><tr><th>หุ้น</th><th>ราคา</th><th>วอลุ่ม</th><th>เปลี่ยน%</th></tr></thead>
+<tbody id="tvBody"><tr><td colspan="4" style="color:#64748b;">กำลังโหลด...</td></tr></tbody>
+</table>
+</div>
+
   <!-- โซน 2: เลือกหุ้น + จอบิด/ออฟเฟอร์ -->
   <div class="card">
     <div class="row">
