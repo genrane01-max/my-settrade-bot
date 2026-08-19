@@ -1100,13 +1100,17 @@ def ensure_subscribe(symbols):
             ok_any = False
             if sub_bid_offer:
                 sub = sub_bid_offer(sym, partial(on_bids_offers, sym))
-                if sub is not None and hasattr(sub, "start"):
-                    sub.start()
+                if sub is not None:
+                    _active_subs.append(sub)
+                    if hasattr(sub, "start"):
+                        sub.start()
                 ok_any = True
             if sub_price:
                 sub = sub_price(sym, partial(on_price_info, sym))
-                if sub is not None and hasattr(sub, "start"):
-                    sub.start()
+                if sub is not None:
+                    _active_subs.append(sub)
+                    if hasattr(sub, "start"):
+                        sub.start()
                 ok_any = True
             if ok_any:
                 subscribed.add(sym)
