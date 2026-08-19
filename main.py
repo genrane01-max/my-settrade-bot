@@ -1809,6 +1809,13 @@ async function refresh(){
         return `<div class="order-row"><span>${o.time} ${icon} ${sideTh} ${o.symbol} ${o.volume}${priceTxt}${cancelBtn}</span><span class="${cls}" style="text-align:right;max-width:55%;overflow-wrap:anywhere;">${(o.msg||'').slice(0,80)}</span></div>`;
       }).join('');
     }
+    
+document.getElementById('cashVal').textContent = s.cash ? fmt(s.cash) : '--';
+    document.getElementById('mvVal').textContent = s.market_value ? fmt(s.market_value) : '--';
+    const pnlEl = document.getElementById('pnlVal');
+    pnlEl.textContent = (s.pnl !== undefined && s.pnl !== null) ? fmt(s.pnl) : '--';
+    pnlEl.className = s.pnl > 0 ? 'green' : (s.pnl < 0 ? 'red' : '');
+
 
     const pb=document.getElementById('portBody');
     const pk=Object.keys(s.positions||{});
