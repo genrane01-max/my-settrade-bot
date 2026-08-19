@@ -1993,6 +1993,25 @@ async function doRemove(){
     alert('❌ ส่งคำขอลบไม่สำเร็จ (เน็ตหลุด/เซิร์ฟเวอร์ไม่ตอบ): '+e);
   }
 }
+
+function loadTopVolume(force) {
+    fetch('/api/top_volume' + (force ? '?force=1' : ''))
+    .then(r => r.json())
+    .then(d => {
+        const rows = d.rows || [];
+        const body = document.getElementById('tvBody');
+        if (!rows.length) {
+            body.innerHTML = '<tr><td colspan="4" style="color:#64748b;">ไม่มีข้อมูล (ใช้งานได้ตอน live)</td></tr>';
+            return;
+        }
+        body.innerHTML = rows.map(r =>
+            `<tr><td><b>${r.symbol}</b></td><td class="mono">${Number(r.price).toFixed(2)}</td><td class="mono">${Number(r.volume).toLocaleString('th-TH')}</td><td class="mono ${r.change >= 0 ? 'green' : 'red'}">${r.change >= 0 ? '+' : ''}${Number(r.change).toFixed(2)}%</td></tr>`
+        ).join('');
+    })
+    .catch(e => console.error(e));
+}
+setInterval(() => loadTopVolume(false), 60000);
+loadTopVolume(false);
 refresh();
 setInterval(refresh,1000);
 </script>
