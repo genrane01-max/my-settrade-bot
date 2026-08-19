@@ -70,16 +70,30 @@ def api_call_with_retry(bucket, func, *args, **kwargs):
         bucket.acquire()
         try:
             resp = func(*args, **kwargs)
-            # เช็คกรณี SDK คืนค่าเป็น dict แจ้ง error 401 / session ตาย
-            if isinstance(resp, dict) and (resp.get("status_code") == 401 or str(resp.get("success")).lower() == "false"):
-                if attempt < max_retries - 1:
-                    logger.warning("⚠️ Session หมดอายุ (เจอ 401) กำลัง Login ใหม่...")
-                    reconnect_settrade()
-                    continue
+            # กรณี SDK คืนเป็น dict
+            if isinstance(resp, dict):
+                sc = resp.get("status_code")
+                if sc == 401:  # session ตายจริง → login ใหม่แล้วลองใหม่
+                    if attempt < max_retries - 1:
+                        logger.warning("⚠️ Session หมดอายุ (401) กำลัง Login ใหม่...")
+                        reconnect_settrade()
+                        continue
+                    return resp
+                if sc in (429, 503, 504, 509) or "bandwidth" in str(resp).lower():
+                    # โดนคุมสปีด / server ไม่ว่าง → backoff แล้วลองใหม่
+                    if attempt < max_retries - 1:
+                        time.sleep(backoff)
+                        backoff *= 2
+                        continue
+                    return resp
+                # success=false อื่นๆ (400/422/500...) = reject จริง → ไม่ retry
+                return resp
             return resp
         except Exception as e:
             err = str(e).lower()
-            if "429" in err or "rate" in err or "too many" in err:
+            if "429" in err or "509" in err or "bandwidth" in err or \
+               "503" in err or "504" in err or "rate" in err or \
+               "too many" in err or "unavailable" in err or "timeout" in err:
                 if attempt < max_retries - 1:
                     time.sleep(backoff)
                     backoff *= 2
