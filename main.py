@@ -1718,26 +1718,6 @@ HTML = """<!DOCTYPE html>
     <div id="portBody" style="font-size:13px;color:#94a3b8;">กำลังโหลด...</div>
   </div>
 
-  <!-- โซน 4: Watchlist -->
-  <div class="card">
-    <div style="font-weight:bold;margin-bottom:8px;">📋 รายการเฝ้า (Watchlist)</div>
-    <div style="font-size:11px;color:#64748b;margin-bottom:4px;">บิดหาย% หรือ ราคาตก% หรือ ขาดทุนจากต้นทุน% (แล้วแต่อันไหนถึงก่อน) → ไล่ราคาขายหมดพอร์ตด้วย MP-MTL (cancel+ส่งใหม่อัตโนมัติถ้าขายไม่หมดในรอบเดียว)</div>
-    <div style="font-size:11px;color:#64748b;margin-bottom:6px;">🩸 = จุดตัดขาดทุนอ้างอิงต้นทุนจริง (คงที่ ไม่เลื่อนตามราคา) — ต้องมีข้อมูลต้นทุนจากพอร์ตก่อนถึงจะทำงาน ดูคอลัมน์ "ต้นทุน" ถ้าว่างแปลว่าคอลัมน์นี้ยังใช้ไม่ได้กับหุ้นนั้น</div>
-    <div style="font-size:11px;color:#64748b;margin-bottom:6px;">🔒 = หุ้นที่ถืออยู่จริง ระบบเพิ่มให้อัตโนมัติ ลบแล้วจะเพิ่มกลับถ้ายังถือของอยู่ (ขายหมดจะหายเอง) — ถ้าอยากหยุดเฝ้าโดยไม่ลบ ใช้ปุ่ม 🟢/⚪ แทน ส่วนหุ้นที่กด + เพิ่มเอง ลบได้อิสระ ไว้ทดสอบ</div>
-    <div style="font-size:11px;color:#64748b;margin-bottom:6px;">↔️ เลื่อนซ้าย-ขวาในตารางได้ถ้าจอแคบ — ปุ่ม 🟢/⚪ และ 🗑 จะไม่ล้นออกนอกการ์ดแล้ว</div>
-    <div id="wlBody"></div>
-    <div style="border-top:1px solid #263449;margin:10px 0;"></div>
-    <div style="font-size:12px;color:#94a3b8;margin-bottom:6px;">➕ เพิ่มหุ้นใหม่ (ไว้ทดสอบ/เฝ้าก่อนซื้อ)</div>
-    <div class="row">
-      <div class="grow"><input id="newSym" placeholder="เช่น AOT" style="text-transform:uppercase;"></div>
-      <div style="width:54px;"><input id="newDrop" type="number" value="60" title="บิดหาย%"></div>
-      <div style="width:54px;"><input id="newPriceDrop" type="number" step="0.1" value="1.0" title="ราคาตก%"></div>
-      <div style="width:54px;"><input id="newTrail" type="number" step="0.1" value="1.0" title="trailing%"></div>
-      <div style="width:54px;"><input id="newCostStop" type="number" step="0.1" value="1.0" title="ขาดทุนจากต้นทุน%"></div>
-      <button class="btn-buy" onclick="addSymbol()">➕</button>
-    </div>
-  </div>
-
   <div class="modal-bg" id="modalBg">
     <div class="modal">
       <div style="font-size:16px;font-weight:bold;margin-bottom:8px;" id="modalTitle">ยืนยัน</div>
