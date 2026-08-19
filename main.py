@@ -395,8 +395,7 @@ def refresh_positions(force=False):
             if not sym or sym == "_TOTAL":
                 continue
             vol = (
-                item.get("amount")
-                or item.get("actualVolume")
+                item.get("actualVolume")
                 or item.get("currentVolume")
                 or item.get("startVolume")
                 or item.get("volume")
