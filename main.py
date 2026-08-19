@@ -1540,6 +1540,16 @@ HTML = """<!DOCTYPE html>
     <div class="log" id="actionLog" style="margin-top:10px;">รอข้อมูล...</div>
   </div>
 
+  <!-- โซน 1.5: สรุปพอร์ต -->
+<div class="card">
+<div style="font-weight:bold;margin-bottom:8px;">💰 สรุปพอร์ต</div>
+<div class="row">
+<div class="grow"><span style="color:#94a3b8;">เงินสด:</span> <span id="cashVal">--</span></div>
+<div class="grow"><span style="color:#94a3b8;">มูลค่าพอร์ต:</span> <span id="mvVal">--</span></div>
+<div class="grow"><span style="color:#94a3b8;">กำไร/ขาดทุน:</span> <span id="pnlVal">--</span></div>
+</div>
+</div>
+
   <!-- โซน 2: เลือกหุ้น + จอบิด/ออฟเฟอร์ -->
   <div class="card">
     <div class="row">
