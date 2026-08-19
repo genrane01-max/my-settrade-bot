@@ -780,6 +780,9 @@ def _sell_chase_worker(symbol, initial_held, pin, tick_ts):
     remaining = initial_held
     round_num = 0
     while remaining > 0 and round_num < CHASE_MAX_ROUNDS:
+        if round_num >= 1:
+            # SET แนะนำเว้นอย่างน้อย 10 วิ ระหว่างคำสั่งซื้อขายต่อเนื่อง (PTRM)
+            time.sleep(CHASE_MIN_ROUND_INTERVAL)
         round_num += 1
         result = place_order("Sell", symbol, remaining, pin, "MP-MTL", 0.0)
         order_no = result.get("order_no")
