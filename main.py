@@ -150,6 +150,7 @@ TICK_LOG_ENABLED = os.getenv("TICK_LOG_ENABLED", "0") == "1"
 CHASE_MAX_ROUNDS = 3
 CHASE_POLL_INTERVAL = 0.25
 CHASE_POLL_TIMEOUT_PER_ROUND = 4.0
+CHASE_MIN_ROUND_INTERVAL = 10  # วิ — เว้นระหว่างรอบ chase ตามแนวทาง SET
 
 # v2.14: retry เฉพาะกรณี cancel เจอ "Invalid Order state" — ดูคอมเมนต์หัวไฟล์
 CANCEL_STATE_RETRY_MAX = 3
