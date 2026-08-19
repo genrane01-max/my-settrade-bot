@@ -432,6 +432,7 @@ def refresh_positions(force=False):
             state["positions"] = pos
             state["avg_cost"] = avg_cost
             state["pos_updated"] = now
+        refresh_account_summary()
     except Exception as e:
         logger.error(f"get_portfolio error: {e}")
         
