@@ -71,25 +71,39 @@ def api_call_with_retry(bucket, func, *args, **kwargs):
         bucket.acquire()
         try:
             resp = func(*args, **kwargs)
-            # กรณี SDK คืนเป็น dict
             if isinstance(resp, dict):
                 sc = resp.get("status_code")
-                if sc == 401:  # session ตายจริง → login ใหม่แล้วลองใหม่
+                if sc == 401:
                     if attempt < max_retries - 1:
                         logger.warning("⚠️ Session หมดอายุ (401) กำลัง Login ใหม่...")
                         reconnect_settrade()
                         continue
                     return resp
                 if sc in (429, 503, 504, 509) or "bandwidth" in str(resp).lower():
-                    # โดนคุมสปีด / server ไม่ว่าง → backoff แล้วลองใหม่
                     if attempt < max_retries - 1:
                         time.sleep(backoff)
                         backoff *= 2
                         continue
                     return resp
-                # success=false อื่นๆ (400/422/500...) = reject จริง → ไม่ retry
                 return resp
             return resp
+        except SettradeError as e:
+            # SDK error แบบมีโครงสร้าง — เช็คจาก status_code/code ตรงๆ (แม่นกว่าเช็คข้อความ)
+            sc = getattr(e, "status_code", None)
+            msg = str(e).lower()
+            if sc == 401 or "401" in msg or "session" in msg or "unauthorized" in msg:
+                if attempt < max_retries - 1:
+                    logger.warning(f"⚠️ Session หมดอายุ (SettradeError {getattr(e, 'code', '')}) กำลัง Login ใหม่...")
+                    reconnect_settrade()
+                    continue
+                raise
+            if sc in (429, 503, 504, 509) or "rate" in msg or "bandwidth" in msg or "too many" in msg or "timeout" in msg:
+                if attempt < max_retries - 1:
+                    time.sleep(backoff)
+                    backoff *= 2
+                    continue
+                raise
+            raise
         except Exception as e:
             err = str(e).lower()
             if "429" in err or "509" in err or "bandwidth" in err or \
