@@ -1688,13 +1688,6 @@ HTML = """<!DOCTYPE html>
     </div>
   </div>
 
-  <!-- โซน 3.5: ประวัติคำสั่งซื้อขาย -->
-  <div class="card">
-    <div style="font-weight:bold;margin-bottom:8px;">🧾 ประวัติคำสั่ง (ล่าสุด 20 รายการ)</div>
-    <div style="font-size:11px;color:#64748b;margin-bottom:6px;">ตอนไล่ราคาขายอัตโนมัติ (chase-sell) แต่ละรอบจะขึ้นเป็นคนละแถวในนี้ — กด 🚫 เพื่อดึง Order No ไปกรอกในช่องทดสอบยกเลิก/เช็คสถานะด้านล่าง</div>
-    <div id="orderLogBody" style="font-size:12px;color:#64748b;">ยังไม่มีคำสั่ง</div>
-  </div>
-
   <!-- โซน 3.6: เช็คสถานะ / ทดสอบยกเลิกคำสั่ง -->
   <div class="card">
     <div style="font-weight:bold;margin-bottom:8px;">🔍 เช็คสถานะ / 🧪 ทดสอบยกเลิกคำสั่ง</div>
@@ -1716,6 +1709,13 @@ HTML = """<!DOCTYPE html>
       <button class="btn-sell grow" onclick="testCancel()">🧪 ทดสอบยกเลิก</button>
     </div>
     <div id="cancelResult" class="log" style="margin-top:10px;display:none;"></div>
+  </div>
+
+  <!-- โซน 3.5: ประวัติคำสั่งซื้อขาย -->
+  <div class="card">
+    <div style="font-weight:bold;margin-bottom:8px;">🧾 ประวัติคำสั่ง (ล่าสุด 20 รายการ)</div>
+    <div style="font-size:11px;color:#64748b;margin-bottom:6px;">ตอนไล่ราคาขายอัตโนมัติ (chase-sell) แต่ละรอบจะขึ้นเป็นคนละแถวในนี้ — กด 🚫 เพื่อดึง Order No ไปกรอกในช่องทดสอบยกเลิก/เช็คสถานะด้านล่าง</div>
+    <div id="orderLogBody" style="font-size:12px;color:#64748b;">ยังไม่มีคำสั่ง</div>
   </div>
 
   <div class="modal-bg" id="modalBg">
