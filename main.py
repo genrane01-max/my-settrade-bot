@@ -1897,6 +1897,7 @@ def main():
         threading.Thread(target=start_realtime, daemon=True).start()
     threading.Thread(target=bot_loop, daemon=True).start()
     threading.Thread(target=session_keeper, daemon=True).start()   # ← เพิ่มบรรทัดนี้
+    threading.Thread(target=stream_watchdog, daemon=True).start()
     port = int(os.getenv("PORT", 10000))
     server = ThreadingHTTPServer(("0.0.0.0", port), DashboardHandler)
     logger.info(f"🌐 Dashboard: http://0.0.0.0:{port}")
