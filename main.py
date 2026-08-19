@@ -730,6 +730,9 @@ def _cancel_order(order_no, symbol, pin):
         attempt += 1
         try:
             resp = api_call_with_retry(order_bucket, cancel_fn, order_no=order_no, pin=pin)
+            # ถ้า SDK คืน success=False (ไม่ throw) → ถือว่ายกเลิกไม่สำเร็จ
+            if isinstance(resp, dict) and str(resp.get("success")).lower() == "false":
+                raise Exception(f"Cancel API Error: {resp.get('message', resp)}")
             logger.info(f"🚫 [chase-sell] ยกเลิกคำสั่ง {symbol} #{order_no} → {resp}")
             return True
         except Exception as e:
