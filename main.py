@@ -465,6 +465,46 @@ def refresh_account_summary():
             state["acct_updated"] = time.time()
     except Exception as e:
         logger.error(f"refresh_account_summary error: {e}")
+        
+def fetch_top_volume(force=False):
+    """ดึงหุ้นวอลุ่มสูงประจำวัน (ใช้ได้ตอน live — sandbox ไม่มีข้อมูล)"""
+    try:
+        if investor is None:
+            return
+        now = time.time()
+        with lock:
+            ts = state.get("top_volume_ts", 0)
+        if not force and now - ts < 60:
+            return
+        md = investor.MarketData() if hasattr(investor, "MarketData") else None
+        if md is None:
+            return
+        fn = _resolve_method(md, ["get_top_volume", "get_top_volumes", "getTopVolume", "get_top_most_active"], "top volume")
+        if fn is None:
+            return
+        resp = api_call_with_retry(query_bucket, fn)
+        rows = []
+        if isinstance(resp, dict):
+            data = resp.get("data", resp)
+            items = []
+            if isinstance(data, list):
+                items = data
+            elif isinstance(data, dict):
+                items = data.get("items") or data.get("topVolume") or data.get("data") or []
+            for it in items[:10]:
+                if not isinstance(it, dict):
+                    continue
+                rows.append({
+                    "symbol": it.get("symbol", ""),
+                    "price": it.get("last") or it.get("price") or 0,
+                    "volume": it.get("volume") or it.get("vol") or 0,
+                    "change": it.get("changePercent") or it.get("percentChange") or it.get("change_pct") or 0,
+                })
+        with lock:
+            state["top_volume"] = rows
+            state["top_volume_ts"] = time.time()
+    except Exception as e:
+        logger.error(f"fetch_top_volume error: {e}")
 
 def sync_watchlist_with_portfolio():
     with lock:
