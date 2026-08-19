@@ -1113,6 +1113,73 @@ def ensure_subscribe(symbols):
                 logger.info(f"📡 สตรีม {sym} แล้ว")
         except Exception as e:
             logger.error(f"subscribe {sym} error: {e}")
+            
+# ===================== STREAM WATCHDOG (reconnect อัตโนมัติ) =====================
+STREAM_WATCHDOG_CHECK = float(os.getenv("STREAM_WATCHDOG_CHECK", "30"))       # วิ — เช็คทุกกี่วิ
+STREAM_WATCHDOG_TIMEOUT = float(os.getenv("STREAM_WATCHDOG_TIMEOUT", "120"))  # วิ — ไม่มี tick กี่วิ = ถือว่าตาย
+
+_last_stream_tick = time.time()   # เวลาล่าสุดที่ได้รับข้อมูลจริง
+_active_subs = []                 # เก็บ subscription object ไว้ stop ตอน reconnect
+
+def _mark_stream_tick(tick_ts):
+    global _last_stream_tick
+    _last_stream_tick = tick_ts
+
+def _is_stream_msg_ok(msg):
+    """ข้อมูลจากสตรีมใช้ได้ไหม (is_success != False)"""
+    if isinstance(msg, dict):
+        return str(msg.get("is_success", "true")).lower() != "false"
+    return True
+
+def _is_market_time():
+    """จ-ศ 09:30-16:45 ตามเวลาไทย (เผื่อ pre-close) — นอกเวลานี้ไม่ reconnect ให้วุ่น"""
+    try:
+        from datetime import datetime, timedelta
+        now = datetime.utcnow() + timedelta(hours=7)
+        if now.weekday() >= 5:
+            return False
+        hm = now.hour * 60 + now.minute
+        return 9 * 60 + 30 <= hm <= 16 * 60 + 45
+    except Exception:
+        return True
+
+def _reconnect_stream():
+    """สร้าง RealtimeDataConnection ใหม่ + subscribe ใหม่ทั้งหมด"""
+    global realtime, _last_stream_tick
+    logger.warning("🔄 สตรีมเงียบเกินกำหนด — กำลัง reconnect ใหม่...")
+    try:
+        for sub in list(_active_subs):
+            try:
+                if hasattr(sub, "stop"):
+                    sub.stop()
+            except Exception:
+                pass
+        _active_subs.clear()
+        subscribed.clear()  # ให้ ensure_subscribe รู้ว่าต้อง subscribe ใหม่
+        realtime = investor.RealtimeDataConnection()
+        with lock:
+            syms = [s for s, c in state["watchlist"].items() if c.get("active", True)]
+        ensure_subscribe(syms)
+        _last_stream_tick = time.time()
+        logger.info("✅ Reconnect สตรีมเรียบร้อย")
+    except Exception as e:
+        logger.error(f"reconnect สตรีมไม่สำเร็จ: {e}")
+
+def stream_watchdog():
+    while True:
+        time.sleep(STREAM_WATCHDOG_CHECK)
+        try:
+            if investor is None:
+                continue
+            if not _is_market_time():
+                continue
+            with lock:
+                if not state["watchlist"]:
+                    continue
+            if realtime is None or time.time() - _last_stream_tick > STREAM_WATCHDOG_TIMEOUT:
+                _reconnect_stream()
+        except Exception as e:
+            logger.error(f"stream_watchdog error: {e}")
 
 def start_realtime():
     global realtime
