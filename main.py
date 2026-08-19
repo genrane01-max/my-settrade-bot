@@ -487,6 +487,11 @@ def place_order(side, symbol, volume, pin, price_type="MP-MTL", price=0.0):
             validity_type="Day",
             pin=pin,
         )
+
+        # ถ้า SDK คืน success=False แต่ไม่ throw exception → ถือว่าไม่สำเร็จ
+        if isinstance(resp, dict) and str(resp.get("success")).lower() == "false":
+            raise Exception(f"API Error: {resp.get('message', resp)}")
+
         order_no = _extract_order_no(resp)
         price_note = f" @{use_price}" if price_type == "Limit" else ""
         msg = f"📤 {side} {symbol} {volume}{price_note} ({price_type})\nตอบ: {resp}"
