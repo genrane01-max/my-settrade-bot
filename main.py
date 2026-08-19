@@ -135,11 +135,11 @@ TICK_LOG_ENABLED = os.getenv("TICK_LOG_ENABLED", "0") == "1"
 
 CHASE_MAX_ROUNDS = 3
 CHASE_POLL_INTERVAL = 0.25
-CHASE_POLL_TIMEOUT_PER_ROUND = 3.0
+CHASE_POLL_TIMEOUT_PER_ROUND = 4.0
 
 # v2.14: retry เฉพาะกรณี cancel เจอ "Invalid Order state" — ดูคอมเมนต์หัวไฟล์
-CANCEL_STATE_RETRY_MAX = 2
-CANCEL_STATE_RETRY_DELAY = 0.25  # วิ
+CANCEL_STATE_RETRY_MAX = 3
+CANCEL_STATE_RETRY_DELAY = 0.50  # วิ
 
 _order_executor = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="order")
 _io_executor = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="io")
