@@ -1053,6 +1053,8 @@ def on_bids_offers(symbol, msg):
     try:
         if TICK_LOG_ENABLED:
             logger.info(f"📥 tick bid/offer เข้า {symbol}: {msg}")
+        if _is_stream_msg_ok(msg):
+            _mark_stream_tick(tick_ts)
         with lock:
             s = state["symbols"].setdefault(symbol, {})
             s["bids"] = _parse_book_levels(msg, "bid")
@@ -1066,6 +1068,8 @@ def on_price_info(symbol, msg):
     try:
         if TICK_LOG_ENABLED:
             logger.info(f"📥 tick price เข้า {symbol}: {msg}")
+        if _is_stream_msg_ok(msg):
+            _mark_stream_tick(tick_ts)
         data = msg.get("data") if isinstance(msg, dict) else {}
         last = 0.0
         if isinstance(data, dict):
