@@ -1325,6 +1325,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     "positions": state["positions"],
                     "avg_cost": state["avg_cost"],
                     "order_log": state["order_log"],
+                    "cash": state.get("cash", 0),
+                    "pnl": state.get("pnl", 0),
+                    "market_value": state.get("market_value", 0),
                 }
             self.send_json(payload)
             return
