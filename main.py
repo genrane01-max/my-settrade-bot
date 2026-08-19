@@ -1369,7 +1369,13 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     "pnl": state.get("pnl", 0),
                     "market_value": state.get("market_value", 0),
                 }
-            self.send_json(payload)
+                self.send_json(payload)
+            return
+        if path == "/api/top_volume":          # ← บล็อกใหม่ (เพิ่มเข้ามา)
+            fetch_top_volume(force="force=1" in self.path)
+            with lock:
+                rows = state.get("top_volume", [])
+            self.send_json({"ok": True, "rows": rows})
             return
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
