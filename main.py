@@ -301,6 +301,20 @@ def init_settrade():
     except Exception as e:
         logger.error(f"Settrade เชื่อมต่อไม่สำเร็จ: {e}")
         return False
+        
+def reconnect_settrade():
+    logger.info("🔄 กำลังเชื่อมต่อ Settrade และ Realtime ใหม่...")
+    if init_settrade():
+        global realtime
+        try:
+            realtime = investor.RealtimeDataConnection()
+            with lock:
+                subs = [s for s, c in state["watchlist"].items() if c.get("active", True)]
+            subscribed.clear()
+            ensure_subscribe(subs)
+            logger.info("✅ Reconnect และ Subscribe Realtime ใหม่สำเร็จ")
+        except Exception as e:
+            logger.error(f"Reconnect Realtime error: {e}")
 
 def refresh_positions(force=False):
     now = time.time()
