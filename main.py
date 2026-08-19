@@ -69,13 +69,25 @@ def api_call_with_retry(bucket, func, *args, **kwargs):
     for attempt in range(max_retries):
         bucket.acquire()
         try:
-            return func(*args, **kwargs)
+            resp = func(*args, **kwargs)
+            # เช็คกรณี SDK คืนค่าเป็น dict แจ้ง error 401 / session ตาย
+            if isinstance(resp, dict) and (resp.get("status_code") == 401 or str(resp.get("success")).lower() == "false"):
+                if attempt < max_retries - 1:
+                    logger.warning("⚠️ Session หมดอายุ (เจอ 401) กำลัง Login ใหม่...")
+                    reconnect_settrade()
+                    continue
+            return resp
         except Exception as e:
             err = str(e).lower()
             if "429" in err or "rate" in err or "too many" in err:
                 if attempt < max_retries - 1:
                     time.sleep(backoff)
                     backoff *= 2
+                    continue
+            elif "401" in err or "session" in err or "unauthorized" in err:
+                if attempt < max_retries - 1:
+                    logger.warning(f"⚠️ Session หมดอายุ ({e}) กำลัง Login ใหม่...")
+                    reconnect_settrade()
                     continue
             raise
 
