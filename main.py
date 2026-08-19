@@ -35,6 +35,7 @@ import requests
 import firebase_admin
 from firebase_admin import credentials, db
 from settrade_v2 import Investor
+from settrade_v2.errors import SettradeError
 
 # ===================== RATE LIMITER (SETTRADE API) =====================
 class TokenBucket:
