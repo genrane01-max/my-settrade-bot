@@ -1030,6 +1030,24 @@ def normalize_book(data):
             rows.append([item[0], item[1]])
     return rows
 
+def _parse_book_levels(msg, side):
+    data = msg.get("data") if isinstance(msg, dict) else {}
+    rows = []
+    if isinstance(data, dict) and f"{side}_price1" in data:
+        for i in range(1, 6):
+            price = data.get(f"{side}_price{i}")
+            vol = data.get(f"{side}_volume{i}")
+            if price is not None:
+                rows.append([price, vol or 0])
+        return rows
+    items = msg.get(f"{side}s") if isinstance(msg, dict) else msg
+    for item in (items or [])[:5]:
+        if isinstance(item, dict):
+            rows.append([item.get("price", 0), item.get("volume", 0)])
+        elif isinstance(item, (list, tuple)) and len(item) >= 2:
+            rows.append([item[0], item[1]])
+    return rows
+
 def on_bids_offers(symbol, msg):
     tick_ts = time.time()
     try:
@@ -1037,8 +1055,8 @@ def on_bids_offers(symbol, msg):
             logger.info(f"📥 tick bid/offer เข้า {symbol}: {msg}")
         with lock:
             s = state["symbols"].setdefault(symbol, {})
-            s["bids"] = normalize_book(msg.get("bids"))
-            s["offers"] = normalize_book(msg.get("offers"))
+            s["bids"] = _parse_book_levels(msg, "bid")
+            s["offers"] = _parse_book_levels(msg, "ask")
         _check_symbol_and_maybe_sell(symbol, tick_ts=tick_ts)
     except Exception as e:
         logger.error(f"on_bids_offers error: {e}")
