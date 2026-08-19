@@ -1065,6 +1065,20 @@ def new_trading_day_reset():
             s["selling"] = False
         subscribed.clear()
     logger.info("📅 เข้าสู่วันเทรดใหม่ → รีเซ็ต baseline บิดหาย%/ราคาตก% และบังคับ subscribe ใหม่")
+    
+def session_keeper():
+    last = None
+    while True:
+        try:
+            now = get_bkk_now()
+            today = now.date()
+            if now.hour == 5 and now.minute < 5 and last != today:
+                logger.info("🌅 ตี 5 แล้ว ต่ออายุ Session ประจำวัน...")
+                reconnect_settrade()
+                last = today
+        except Exception as e:
+            logger.error(f"session_keeper error: {e}")
+        time.sleep(30)
 
 def bot_loop():
     global _last_trading_date, _last_watchlist_load
