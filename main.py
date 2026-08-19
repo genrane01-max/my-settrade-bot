@@ -1065,30 +1065,24 @@ def ensure_subscribe(symbols):
         try:
             sub_bid_offer = _resolve_method(
                 realtime,
-                [
-                    "subscribe_bid_offer",
-                    "subscribe_bids_offers",
-                    "subscribeBidOffer",
-                    "subscribe_bidoffer",
-                    "subscribe_bid_offers",
-                ],
+                ["subscribe_bid_offer", "subscribe_bids_offers", "subscribeBidOffer", "subscribe_bidoffer", "subscribe_bid_offers"],
                 "subscribe bid/offer",
             )
             sub_price = _resolve_method(
                 realtime,
-                [
-                    "subscribe_price_info",
-                    "subscribePriceInfo",
-                    "subscribe_price",
-                ],
+                ["subscribe_price_info", "subscribePriceInfo", "subscribe_price"],
                 "subscribe price info",
             )
             ok_any = False
             if sub_bid_offer:
-                sub_bid_offer(sym, partial(on_bids_offers, sym))
+                sub = sub_bid_offer(sym, partial(on_bids_offers, sym))
+                if sub is not None and hasattr(sub, "start"):
+                    sub.start()
                 ok_any = True
             if sub_price:
-                sub_price(sym, partial(on_price_info, sym))
+                sub = sub_price(sym, partial(on_price_info, sym))
+                if sub is not None and hasattr(sub, "start"):
+                    sub.start()
                 ok_any = True
             if ok_any:
                 subscribed.add(sym)
