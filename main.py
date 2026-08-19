@@ -1540,13 +1540,22 @@ HTML = """<!DOCTYPE html>
     <div class="log" id="actionLog" style="margin-top:10px;">รอข้อมูล...</div>
   </div>
 
-  <!-- โซน 1.5: สรุปพอร์ต -->
+<!-- โซน 1.5: สรุปพอร์ต -->
 <div class="card">
-<div style="font-weight:bold;margin-bottom:8px;">💰 สรุปพอร์ต</div>
-<div class="row">
-<div class="grow"><span style="color:#94a3b8;">เงินสด:</span> <span id="cashVal">--</span></div>
-<div class="grow"><span style="color:#94a3b8;">มูลค่าพอร์ต:</span> <span id="mvVal">--</span></div>
-<div class="grow"><span style="color:#94a3b8;">กำไร/ขาดทุน:</span> <span id="pnlVal">--</span></div>
+<div style="font-weight:bold;margin-bottom:10px;">💰 สรุปพอร์ต</div>
+<div style="display:flex;justify-content:space-between;gap:8px;margin-bottom:8px;">
+<div style="flex:1;background:#1e293b;border-radius:8px;padding:10px;">
+<div style="font-size:12px;color:#94a3b8;">เงินสด</div>
+<div id="cashVal" style="font-size:17px;font-weight:bold;">--</div>
+</div>
+<div style="flex:1;background:#1e293b;border-radius:8px;padding:10px;">
+<div style="font-size:12px;color:#94a3b8;">มูลค่าพอร์ต</div>
+<div id="mvVal" style="font-size:17px;font-weight:bold;">--</div>
+</div>
+</div>
+<div style="background:#1e293b;border-radius:8px;padding:10px;">
+<div style="font-size:12px;color:#94a3b8;">กำไร/ขาดทุน</div>
+<div id="pnlVal" style="font-size:19px;font-weight:bold;">--</div>
 </div>
 </div>
 
