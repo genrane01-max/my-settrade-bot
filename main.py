@@ -1718,12 +1718,6 @@ HTML = """<!DOCTYPE html>
     <div id="cancelResult" class="log" style="margin-top:10px;display:none;"></div>
   </div>
 
-  <!-- โซน 3.7: พอร์ตปัจจุบัน (ดิบๆ ไม่ผ่านการกรอง) -->
-  <div class="card">
-    <div style="font-weight:bold;margin-bottom:8px;">💼 พอร์ตปัจจุบัน (จาก Settrade ตรงๆ)</div>
-    <div id="portBody" style="font-size:13px;color:#94a3b8;">กำลังโหลด...</div>
-  </div>
-
   <div class="modal-bg" id="modalBg">
     <div class="modal">
       <div style="font-size:16px;font-weight:bold;margin-bottom:8px;" id="modalTitle">ยืนยัน</div>
