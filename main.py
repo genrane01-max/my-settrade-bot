@@ -292,7 +292,8 @@ def init_settrade():
         return False
     try:
         investor = Investor(app_id=app_id, app_secret=app_secret,
-                            broker_id=broker_id, app_code=app_code)
+                            broker_id=broker_id, app_code=app_code,
+                            is_auto_queue=True)   # ← เพิ่มบรรทัดนี้
         equity = investor.Equity(account_no=account_no)
         with lock:
             state["connected"] = True
