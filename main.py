@@ -372,10 +372,8 @@ def refresh_positions(force=False):
         )
         if get_port is None:
             return
-
         account_no = os.getenv("SETTRADE_ACCOUNT_N")
         raw = api_call_with_retry(query_bucket, _call_flexible, get_port, account_no)
-
         portfolio_list_key_used = None
         if isinstance(raw, dict):
             for key in ("portfolioList", "portfolio_list", "portfolios", "data", "results"):
@@ -385,7 +383,6 @@ def refresh_positions(force=False):
             items = raw.get(portfolio_list_key_used, []) if portfolio_list_key_used else []
         else:
             items = raw or []
-
         pos = {}
         avg_cost = {}
         for item in items:
@@ -405,7 +402,6 @@ def refresh_positions(force=False):
             )
             if sym:
                 pos[sym] = int(vol or 0)
-
             cost = (
                 item.get("averagePrice")
                 if item.get("averagePrice") not in (None, 0)
@@ -420,21 +416,21 @@ def refresh_positions(force=False):
                     avg_cost[sym] = float(cost)
                 except (TypeError, ValueError):
                     pass
-
         if not pos and raw:
             list_is_genuinely_empty = (
                 isinstance(raw, dict) and portfolio_list_key_used is not None and items == []
             )
             if not list_is_genuinely_empty:
                 logger.warning(f"[get_portfolio] ได้ raw data กลับมาแต่แปลงเป็น position ไม่ได้: {str(raw)[:500]}")
-
-        with lock:                                      # เยื้อง 8
-            state["positions"] = pos                    # เยื้อง 12
-            state["avg_cost"] = avg_cost                # เยื้อง 12
-            state["pos_updated"] = now                  # เยื้อง 12
-        refresh_account_summary()                       # เยื้อง 8 ← ต้องอยู่ตรงนี้!
-    except Exception as e:                              # เยื้อง 4
-        logger.error(f"get_portfolio error: {e}")       # เยื้อง 8
+        with lock:
+            state["positions"] = pos
+            state["avg_cost"] = avg_cost
+            state["pos_updated"] = now
+        refresh_account_summary()
+    except Exception as e:
+        logger.error(f"get_portfolio error: {e}")
+        with lock:
+            state["pos_updated"] = time.time()   # ← เพิ่มบรรทัดนี้ (กันวน retry ทุก 2 วิ)
         
 def refresh_account_summary():
     """ดึงเงินสด + กำไร/ขาดทุนรวม + มูลค่าพอร์ต มาเก็บใน state (สำหรับแสดงบน dashboard)"""
