@@ -62,10 +62,41 @@ class TokenBucket:
                 wait_time = (tokens - self.tokens) / self.rate
             time.sleep(wait_time)  # sleep นอก lock
 
+
 Q_RATE = float(os.getenv("SETTRADE_QUERY_RATE", "4.0"))
 O_RATE = float(os.getenv("SETTRADE_ORDER_RATE", "1.0"))
 query_bucket = TokenBucket(rate=Q_RATE, capacity=5)
 order_bucket = TokenBucket(rate=O_RATE, capacity=5)
+
+
+def _is_waf_block(payload) -> bool:
+    """
+    ตรวจจับกรณีโดน WAF/Incapsula บล็อกก่อนที่ request จะไปถึง Settrade จริง —
+    สังเกตได้จากคำพวกนี้ที่ปนมาในข้อความ error/response แทนที่จะเป็นข้อมูลปกติ
+    """
+    text = str(payload).lower()
+    markers = (
+        "incapsula",
+        "request unsuccessful",
+        "<!doctype html",
+        "<html",
+        "_incapsula_resource",
+        "incident_id",
+    )
+    return any(m in text for m in markers)
+
+
+_last_waf_alert = 0
+WAF_ALERT_COOLDOWN = 300  # วิ — แจ้ง Telegram ไม่เกิน 1 ครั้งทุก 5 นาที กันสแปม
+
+
+def _alert_waf_block_throttled(msg):
+    global _last_waf_alert
+    now = time.time()
+    if now - _last_waf_alert > WAF_ALERT_COOLDOWN:
+        _last_waf_alert = now
+        send_telegram_async(msg)
+
 
 def api_call_with_retry(bucket, func, *args, **kwargs):
     max_retries = 3
@@ -74,11 +105,27 @@ def api_call_with_retry(bucket, func, *args, **kwargs):
         bucket.acquire()
         try:
             resp = func(*args, **kwargs)
+
+            if _is_waf_block(resp):
+                if attempt < max_retries - 1:
+                    logger.warning(
+                        f"⚠️ [waf-block] โดน WAF/Incapsula บล็อก (ไม่ถึง Settrade จริง) — "
+                        f"รอ {backoff:.1f}s แล้วลองใหม่ (รอบ {attempt + 1}/{max_retries})"
+                    )
+                    time.sleep(backoff)
+                    backoff *= 2
+                    continue
+                _alert_waf_block_throttled(
+                    f"❌ [waf-block] โดน WAF บล็อกซ้ำจนครบ {max_retries} รอบ — "
+                    f"ต้องตรวจ IP/ช่วงเวลาที่ยิง request"
+                )
+                raise Exception(f"WAF block ซ้ำจนครบ retry: {str(resp)[:200]}")
+
             if isinstance(resp, dict):
                 sc = resp.get("status_code")
                 if sc == 401:
                     if attempt < max_retries - 1:
-                        logger.warning("⚠️ Session หมดอายุ (401) กำลัง Login ใหม่...")
+                        logger.warning("⚠️ Session หมดอายุ(401) กำลัง Login ใหม่...")
                         reconnect_settrade()
                         continue
                     return resp
@@ -90,13 +137,21 @@ def api_call_with_retry(bucket, func, *args, **kwargs):
                     return resp
                 return resp
             return resp
+
         except SettradeError as e:
-            # SDK error แบบมีโครงสร้าง — เช็คจาก status_code/code ตรงๆ (แม่นกว่าเช็คข้อความ)
+            if _is_waf_block(e):
+                if attempt < max_retries - 1:
+                    logger.warning(f"⚠️ [waf-block] SettradeError ก็โดนบล็อกด้วย — retry รอบ {attempt + 1}")
+                    time.sleep(backoff)
+                    backoff *= 2
+                    continue
+                _alert_waf_block_throttled(f"❌ [waf-block] โดนบล็อกซ้ำจนครบรอบ (SettradeError)")
+                raise
             sc = getattr(e, "status_code", None)
             msg = str(e).lower()
             if sc == 401 or "401" in msg or "session" in msg or "unauthorized" in msg:
                 if attempt < max_retries - 1:
-                    logger.warning(f"⚠️ Session หมดอายุ (SettradeError {getattr(e, 'code', '')}) กำลัง Login ใหม่...")
+                    logger.warning(f"⚠️ Session หมดอายุ(SettradeError {getattr(e, 'code', '')}) กำลัง Login ใหม่...")
                     reconnect_settrade()
                     continue
                 raise
@@ -107,7 +162,16 @@ def api_call_with_retry(bucket, func, *args, **kwargs):
                     continue
                 raise
             raise
+
         except Exception as e:
+            if _is_waf_block(e):
+                if attempt < max_retries - 1:
+                    logger.warning(f"⚠️ [waf-block] โดนบล็อก (generic exception) — retry รอบ {attempt + 1}")
+                    time.sleep(backoff)
+                    backoff *= 2
+                    continue
+                _alert_waf_block_throttled(f"❌ [waf-block] โดนบล็อกซ้ำจนครบรอบ (generic exception)")
+                raise
             err = str(e).lower()
             if "429" in err or "509" in err or "bandwidth" in err or \
                "503" in err or "504" in err or "rate" in err or \
@@ -118,7 +182,7 @@ def api_call_with_retry(bucket, func, *args, **kwargs):
                     continue
             elif "401" in err or "session" in err or "unauthorized" in err:
                 if attempt < max_retries - 1:
-                    logger.warning(f"⚠️ Session หมดอายุ ({e}) กำลัง Login ใหม่...")
+                    logger.warning(f"⚠️ Session หมดอายุ({e}) กำลัง Login ใหม่...")
                     reconnect_settrade()
                     continue
             raise
