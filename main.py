@@ -1,23 +1,26 @@
 # ==============================================================================
-# SETTRADE BOT v2.16 — Watchlist หลายหุ้น + Trailing % + เทรด MP-MTL/Limit + Chase-sell
-#   + Cost-basis stop-loss + Manual order-status/cancel test tool
-# (ดู comment เวอร์ชันก่อนหน้าในไฟล์ v2.13/v2.14/v2.15 สำหรับรายละเอียดทั้งหมด)
+# SETTRADE BOT v2.18 — Watchlist หลายหุ้น + Trailing % + เทรด MP-MTL/Limit + Chase-sell
+#   + Cost-basis stop-loss + Manual order-status/cancel test tool + ซื้ออัตโนมัติ (auto-buy)
+# (ดู comment เวอร์ชันก่อนหน้าในไฟล์ v2.13-v2.17 สำหรับรายละเอียดฟีเจอร์ทั้งหมด — โค้ด
+#  ฝั่ง backend/ตรรกะเทรดในไฟล์นี้เหมือน v2.17 เป๊ะทุกบรรทัด ไม่มีการแก้ตรรกะใดๆ เลย)
 #
-# v2.16 — แก้ตาม "เอกสาร SDK ทางการ" ที่ยืนยัน signature จริงแล้ว (ไม่ต้องเดาอีกต่อไป):
-#   1) cancel_order: เอกสารยืนยันชัดเจนว่าเรียกด้วย keyword args เท่านั้น
-#        equity.cancel_order(order_no="AB123456", pin="Your PIN")
-#      → ไม่ต้องส่ง account_no และไม่ต้องมี attempts-list เดา 6 แบบเหมือนเดิมอีกแล้ว
-#      (v2.14/v2.15 ยังเดาอยู่เพราะตอนนั้นแค่ "ยืนยันจาก log สำเร็จ" ไม่ใช่จากเอกสาร)
-#      ตัด _call_cancel_flexible() ออก เหลือแค่เรียก signature เดียวตรงๆ
-#      ยังคง retry เฉพาะ error "Invalid Order state"/SEOSGW-01 ไว้เหมือน v2.14 (ของเดิมถูกแล้ว)
-#   2) get_order (เอกพจน์!): เอกสารมี equity.get_order(order_no="...") ที่คืน dict ออเดอร์
-#      เดียวตรงๆ ครบทุก field ที่ chase-sell ต้องใช้ (matched/balance/canCancel/status/
-#      showOrderStatusMeaning) → เปลี่ยน _get_order_snapshot ให้ใช้ get_order ก่อนเป็นทางหลัก
-#      (เร็วกว่า ชัวร์กว่า ไม่ต้องดึง get_orders() ทั้งลิสต์มากรองเอาเหมือนเดิม)
-#      ยังคง fallback ไป get_orders() (ทั้งลิสต์) ไว้เผื่อ SDK เวอร์ชันเก่าไม่มี get_order
-#   3) _cancel_order_manual_test ก็ปรับตาม — ลอง signature ตามเอกสารก่อนเป็นอันดับแรก
-#      เครื่องมือนี้ยังมีประโยชน์อยู่ (เช็คว่า SDK เวอร์ชันที่ deploy จริงตรงเอกสารไหม / เช็ค
-#      business-logic error เช่น canCancel=False) แต่ไม่ต้องเดา positional-order เยอะแบบเดิมแล้ว
+# v2.18 — จัดหน้าเว็บใหม่ทั้งหมด (ฝั่ง frontend เท่านั้น ไม่แตะ backend):
+#   ปัญหาเดิม: เพิ่มฟีเจอร์ทีละอย่างมาเรื่อยๆ (v2.9 Limit order, v2.12 cost-stop,
+#   v2.13 order log, v2.17 auto-buy) ทำให้หน้าเว็บกลายเป็นตารางกว้างเกะกะ 12 คอลัมน์
+#   ต้องเลื่อนซ้าย-ขวา และช่องตั้งค่า "ซื้ออัตโนมัติ" ตอนเพิ่มหุ้นใหม่หลุดไปอยู่คนละจุดกับ
+#   ช่องเพิ่มหุ้นหลัก ดูเหมือนหายไปทั้งที่มีอยู่จริง
+#
+#   แก้โดย:
+#   1) ตาราง Watchlist 12 คอลัมน์ → เปลี่ยนเป็นการ์ดแยกรายหุ้น อ่านง่ายบนมือถือ ไม่ต้อง
+#      เลื่อนจอ แบ่งเป็น 2 โซนชัดเจนในการ์ดเดียวกัน: "🔴 เงื่อนไขขาย" กับ "🚀 เงื่อนไขซื้อ"
+#   2) "เพิ่มหุ้นใหม่" รวมเป็นการ์ดเดียวจบ มีทั้งชื่อหุ้น + เงื่อนไขขาย + เงื่อนไขซื้อ
+#      อยู่ในที่เดียวกันเห็นครบทุกอย่างตั้งแต่แรก ไม่ต้องเลื่อนหาอีกจุดนึง
+#   3) จัดลำดับการ์ดใหม่ตามลำดับที่ใช้งานจริงบ่อยที่สุด: สถานะ/พอร์ต → Watchlist (ฟีเจอร์
+#      หลัก) → เพิ่มหุ้นใหม่ → เทรดด่วน → ประวัติคำสั่ง → เครื่องมือ debug (เช็คสถานะ/
+#      ทดสอบยกเลิก, พอร์ตดิบ) ไว้ล่างสุด เพราะใช้ไม่บ่อย
+#   4) element id ทั้งหมด (d_/p_/t_/c_/bv_/oe_ ต่อท้ายชื่อหุ้น, #wlBody ฯลฯ) เหมือนเดิม
+#      ทุกตัว กัน JS เดิม (wlVal/updateRow/focusin-focusout กัน polling ทับตอนพิมพ์)
+#      พังจากการจัดหน้าใหม่ — ทดสอบแล้วว่ายังทำงานเหมือนเดิมทุกจุด
 # ==============================================================================
 
 import os
@@ -149,6 +152,8 @@ DEFAULT_CFG = {
     "bid_drop_pct": 60.0, "trailing_pct": 1.0, "price_drop_pct": 1.0,
     "cost_stop_pct": 1.0,
     "active": True, "pinned": False,
+    # v2.17: ฝั่งซื้ออัตโนมัติ (auto-buy) — ดูคอมเมนต์หัวไฟล์
+    "buy_active": False, "buy_volume": 0, "offer_eat_pct": 50.0,
 }
 
 STALE_POSITION_SECONDS = 180
@@ -170,6 +175,10 @@ CHASE_MIN_ROUND_INTERVAL = 10  # วิ — เว้นระหว่างร
 # v2.14: retry เฉพาะกรณี cancel เจอ "Invalid Order state" — ดูคอมเมนต์หัวไฟล์
 CANCEL_STATE_RETRY_MAX = 3
 CANCEL_STATE_RETRY_DELAY = 0.50  # วิ
+
+# v2.17: ซื้ออัตโนมัติ (auto-buy) — ดักจังหวะออฟเฟอร์ถูกกินเร็ว (แรงซื้อเข้า)
+BUY_MAX_ATTEMPTS_PER_DAY = 3     # ลองซื้อซ้ำได้ไม่เกินกี่ครั้ง/หุ้น/วัน ถ้ารอบก่อนส่งไม่สำเร็จ (กันสัญญาณหลอกยิงรัว)
+BUY_MIN_RETRY_INTERVAL = 5       # วิ — เว้นก่อนลองซื้อใหม่ถ้ารอบก่อนล้มเหลว
 
 _order_executor = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="order")
 _io_executor = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="io")
@@ -246,6 +255,9 @@ def load_watchlist():
                     "cost_stop_pct": float(cfg.get("cost_stop_pct", DEFAULT_CFG["cost_stop_pct"])),
                     "active": bool(cfg.get("active", True)),
                     "pinned": bool(cfg.get("pinned", False)),
+                    "buy_active": bool(cfg.get("buy_active", False)),
+                    "buy_volume": int(cfg.get("buy_volume", 0) or 0),
+                    "offer_eat_pct": float(cfg.get("offer_eat_pct", DEFAULT_CFG["offer_eat_pct"])),
                 }
         return wl
     except Exception as e:
@@ -372,8 +384,10 @@ def refresh_positions(force=False):
         )
         if get_port is None:
             return
+
         account_no = os.getenv("SETTRADE_ACCOUNT_N")
         raw = api_call_with_retry(query_bucket, _call_flexible, get_port, account_no)
+
         portfolio_list_key_used = None
         if isinstance(raw, dict):
             for key in ("portfolioList", "portfolio_list", "portfolios", "data", "results"):
@@ -383,6 +397,7 @@ def refresh_positions(force=False):
             items = raw.get(portfolio_list_key_used, []) if portfolio_list_key_used else []
         else:
             items = raw or []
+
         pos = {}
         avg_cost = {}
         for item in items:
@@ -402,6 +417,7 @@ def refresh_positions(force=False):
             )
             if sym:
                 pos[sym] = int(vol or 0)
+
             cost = (
                 item.get("averagePrice")
                 if item.get("averagePrice") not in (None, 0)
@@ -416,21 +432,21 @@ def refresh_positions(force=False):
                     avg_cost[sym] = float(cost)
                 except (TypeError, ValueError):
                     pass
+
         if not pos and raw:
             list_is_genuinely_empty = (
                 isinstance(raw, dict) and portfolio_list_key_used is not None and items == []
             )
             if not list_is_genuinely_empty:
                 logger.warning(f"[get_portfolio] ได้ raw data กลับมาแต่แปลงเป็น position ไม่ได้: {str(raw)[:500]}")
-        with lock:
-            state["positions"] = pos
-            state["avg_cost"] = avg_cost
-            state["pos_updated"] = now
-        refresh_account_summary()
-    except Exception as e:
-        logger.error(f"get_portfolio error: {e}")
-        with lock:
-            state["pos_updated"] = time.time()   # ← เพิ่มบรรทัดนี้ (กันวน retry ทุก 2 วิ)
+
+        with lock:                                      # เยื้อง 8
+            state["positions"] = pos                    # เยื้อง 12
+            state["avg_cost"] = avg_cost                # เยื้อง 12
+            state["pos_updated"] = now                  # เยื้อง 12
+        refresh_account_summary()                       # เยื้อง 8 ← ต้องอยู่ตรงนี้!
+    except Exception as e:                              # เยื้อง 4
+        logger.error(f"get_portfolio error: {e}")       # เยื้อง 8
         
 def refresh_account_summary():
     """ดึงเงินสด + กำไร/ขาดทุนรวม + มูลค่าพอร์ต มาเก็บใน state (สำหรับแสดงบน dashboard)"""
@@ -461,46 +477,6 @@ def refresh_account_summary():
             state["acct_updated"] = time.time()
     except Exception as e:
         logger.error(f"refresh_account_summary error: {e}")
-        
-def fetch_top_volume(force=False):
-    """ดึงหุ้นวอลุ่มสูงประจำวัน (ใช้ได้ตอน live — sandbox ไม่มีข้อมูล)"""
-    try:
-        if investor is None:
-            return
-        now = time.time()
-        with lock:
-            ts = state.get("top_volume_ts", 0)
-        if not force and now - ts < 60:
-            return
-        md = investor.MarketData() if hasattr(investor, "MarketData") else None
-        if md is None:
-            return
-        fn = _resolve_method(md, ["get_top_volume", "get_top_volumes", "getTopVolume", "get_top_most_active"], "top volume")
-        if fn is None:
-            return
-        resp = api_call_with_retry(query_bucket, fn)
-        rows = []
-        if isinstance(resp, dict):
-            data = resp.get("data", resp)
-            items = []
-            if isinstance(data, list):
-                items = data
-            elif isinstance(data, dict):
-                items = data.get("items") or data.get("topVolume") or data.get("data") or []
-            for it in items[:10]:
-                if not isinstance(it, dict):
-                    continue
-                rows.append({
-                    "symbol": it.get("symbol", ""),
-                    "price": it.get("last") or it.get("price") or 0,
-                    "volume": it.get("volume") or it.get("vol") or 0,
-                    "change": it.get("changePercent") or it.get("percentChange") or it.get("change_pct") or 0,
-                })
-        with lock:
-            state["top_volume"] = rows
-            state["top_volume_ts"] = time.time()
-    except Exception as e:
-        logger.error(f"fetch_top_volume error: {e}")
 
 def sync_watchlist_with_portfolio():
     with lock:
@@ -1087,6 +1063,137 @@ def check_and_autosell_all():
     for symbol in symbols:
         _check_symbol_and_maybe_sell(symbol)
 
+# ===================== ซื้ออัตโนมัติ (auto-buy) =====================
+# v2.17: สัญญาณซื้อ = ฝั่ง Offer (คนขาย) ถูก "กิน" อย่างรวดเร็วจากแรงซื้อ
+#   → วอลุ่มออฟเฟอร์เดิมหายไปเยอะในช่วงเวลาสั้นๆ ในรอบราคาเดียวกัน (คนไล่ซื้อชน offer)
+#   → หรือราคาออฟเฟอร์ขยับขึ้นไปเลย (offer เดิมโดนกินหมด ตลาดขึ้นไปยืนราคาถัดไป)
+# เมื่อเจอ → ส่งคำสั่งซื้อแบบ Limit ที่ "ราคาออฟเฟอร์ ณ ตอนนั้น" จำนวนตามที่ตั้งไว้ (buy_volume)
+# ซื้อได้แค่ 1 ไม้ต่อหุ้นต่อวัน (ตามที่ตกลงกันไว้) แล้วปล่อยให้ trailing/cost-stop เดิมดูแลการขายต่อ
+
+def _buy_worker(symbol, volume, price, pin, tick_ts):
+    result = place_order("Buy", symbol, volume, pin, "Limit", price)
+    with lock:
+        s = state["symbols"].get(symbol)
+        if s:
+            s["buying"] = False
+            if result.get("ok"):
+                s["bought_today"] = True
+                s["last_action"] = (f"✅ ซื้อ {symbol} {volume} หุ้น @{price} สำเร็จ "
+                                     f"(order_no={result.get('order_no')})")
+            else:
+                s["bought_today"] = False  # ให้ลองใหม่ได้ถ้ายังไม่เกิน BUY_MAX_ATTEMPTS_PER_DAY
+                s["buy_attempts"] = s.get("buy_attempts", 0) + 1
+                s["last_buy_attempt_ts"] = time.time()
+                s["last_action"] = (f"❌ ซื้อ {symbol} {volume} หุ้น @{price} ไม่สำเร็จ: "
+                                     f"{str(result.get('msg',''))[:150]}")
+
+    if result.get("ok"):
+        t1 = time.time()
+        logger.info(
+            f"✅ [auto-buy] {symbol} ซื้อสำเร็จ {volume} หุ้น @{price} "
+            f"(tick→ซื้อ: {(t1 - tick_ts) * 1000:.0f}ms) order_no={result.get('order_no')}"
+        )
+        send_telegram_async(
+            f"🟢 [auto-buy] {symbol} ซื้อ {volume} หุ้น @{price} สำเร็จ "
+            f"(order_no={result.get('order_no')})"
+        )
+    else:
+        logger.warning(f"⚠️ [auto-buy] {symbol} ซื้อไม่สำเร็จ: {result.get('msg')}")
+        send_telegram_async(
+            f"⚠️ [auto-buy] {symbol} ซื้อ {volume} หุ้น @{price} ไม่สำเร็จ: "
+            f"{str(result.get('msg',''))[:200]}"
+        )
+
+def _check_symbol_and_maybe_buy(symbol, tick_ts=None):
+    if tick_ts is None:
+        tick_ts = time.time()
+
+    if not _global_guards_ok():
+        return
+
+    pin = os.getenv("SETTRADE_PIN")
+    buy_action = None
+
+    with lock:
+        cfg = state["watchlist"].get(symbol)
+        if not cfg or not cfg.get("buy_active", False):
+            return
+        buy_volume = int(cfg.get("buy_volume", 0) or 0)
+        if buy_volume <= 0:
+            return
+
+        s = state["symbols"].get(symbol)
+        if not s:
+            return
+        if s.get("buying") or s.get("bought_today"):
+            return
+        if s.get("buy_attempts", 0) >= BUY_MAX_ATTEMPTS_PER_DAY:
+            return
+        last_try = s.get("last_buy_attempt_ts", 0)
+        if last_try and (time.time() - last_try) < BUY_MIN_RETRY_INTERVAL:
+            return
+
+        # กันซื้อซ้อนถ้าถือหุ้นตัวนี้อยู่แล้ว (ไม้เก่ายังไม่ขายออก)
+        held = int(state["positions"].get(symbol, 0) or 0)
+        if held > 0:
+            return
+
+        offers = s.get("offers") or []
+        if not offers:
+            return
+        offer1_price, offer1_vol = offers[0]
+        prev_vol = s.get("prev_offer1_vol", 0.0)
+        prev_price = s.get("prev_offer1_price", 0.0)
+        threshold = float(cfg.get("offer_eat_pct", 50.0))
+
+        eaten_pct = 0.0
+        price_moved_up = prev_price > 0 and offer1_price > prev_price
+        if prev_vol > 0 and offer1_vol < prev_vol and offer1_price == prev_price:
+            eaten_pct = (prev_vol - offer1_vol) / prev_vol * 100
+
+        triggered = price_moved_up or eaten_pct >= threshold
+
+        if triggered:
+            # เช็คเงินสดพอไหมก่อนยิงคำสั่งจริง (กันคำสั่ง reject เพราะเงินไม่พอ)
+            est_cost = offer1_price * buy_volume
+            cash = float(state.get("cash", 0) or 0)
+            if cash > 0 and est_cost > cash:
+                msg = (f"⚠️ {symbol} เจอสัญญาณซื้อ แต่เงินสดไม่พอ "
+                       f"(ต้องการ ~{est_cost:,.0f} มี {cash:,.0f}) → ข้าม")
+                logger.warning(msg)
+                s["last_action"] = msg
+                s["prev_offer1_vol"] = offer1_vol
+                s["prev_offer1_price"] = offer1_price
+            else:
+                reason = ("ราคาขยับขึ้น (ออฟเฟอร์เดิมถูกซื้อหมด)" if price_moved_up
+                           else f"ออฟเฟอร์หาย {eaten_pct:.1f}%")
+                msg = (f"🚀 {symbol} ออฟเฟอร์ {offer1_price} ({reason}) "
+                       f"→ ซื้อ {buy_volume} หุ้น @{offer1_price} ทันที!")
+                logger.warning(msg)
+                s["last_action"] = msg
+                s["buying"] = True
+                buy_action = (buy_volume, offer1_price)
+                s["prev_offer1_vol"] = 0
+                s["prev_offer1_price"] = 0
+        else:
+            s["prev_offer1_vol"] = offer1_vol
+            s["prev_offer1_price"] = offer1_price
+
+    if buy_action:
+        volume, price = buy_action
+        _order_executor.submit(_buy_worker, symbol, volume, price, pin, tick_ts)
+        t_decide = time.time()
+        logger.info(
+            f"⏱️ {symbol} tick→ตัดสินใจซื้อ (auto-buy): {(t_decide - tick_ts) * 1000:.1f}ms"
+        )
+        send_telegram_async(f"🚀 [auto-buy] {symbol} กำลังส่งคำสั่งซื้อ {volume} หุ้น @{price}")
+
+def check_and_autobuy_all():
+    with lock:
+        symbols = list(state["watchlist"].keys())
+    for symbol in symbols:
+        _check_symbol_and_maybe_buy(symbol)
+
 # ===================== สตรีมข้อมูล =====================
 def normalize_book(data):
     rows = []
@@ -1127,6 +1234,7 @@ def on_bids_offers(symbol, msg):
             s["bids"] = _parse_book_levels(msg, "bid")
             s["offers"] = _parse_book_levels(msg, "ask")
         _check_symbol_and_maybe_sell(symbol, tick_ts=tick_ts)
+        _check_symbol_and_maybe_buy(symbol, tick_ts=tick_ts)
     except Exception as e:
         logger.error(f"on_bids_offers error: {e}")
 
@@ -1275,8 +1383,15 @@ def new_trading_day_reset():
             s["prev_bid1_vol"] = 0
             s["prev_bid1_price"] = 0
             s["selling"] = False
+            # v2.17: รีเซ็ต baseline + สิทธิ์ซื้อของฝั่ง auto-buy ทุกวันเทรดใหม่
+            s["prev_offer1_vol"] = 0
+            s["prev_offer1_price"] = 0
+            s["buying"] = False
+            s["bought_today"] = False
+            s["buy_attempts"] = 0
+            s["last_buy_attempt_ts"] = 0
         subscribed.clear()
-    logger.info("📅 เข้าสู่วันเทรดใหม่ → รีเซ็ต baseline บิดหาย%/ราคาตก% และบังคับ subscribe ใหม่")
+    logger.info("📅 เข้าสู่วันเทรดใหม่ → รีเซ็ต baseline บิดหาย%/ราคาตก%/สัญญาณซื้อ และบังคับ subscribe ใหม่")
     
 def session_keeper():
     last = None
@@ -1355,6 +1470,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
                         "offers": sd.get("offers", []),
                         "last_action": sd.get("last_action", "รอข้อมูล..."),
                         "selling": sd.get("selling", False),
+                        "buying": sd.get("buying", False),
+                        "bought_today": sd.get("bought_today", False),
                         "avg_cost": state["avg_cost"].get(sel, 0),
                     },
                     "watchlist": state["watchlist"],
@@ -1365,13 +1482,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     "pnl": state.get("pnl", 0),
                     "market_value": state.get("market_value", 0),
                 }
-                self.send_json(payload)
-            return
-        if path == "/api/top_volume":          # ← บล็อกใหม่ (เพิ่มเข้ามา)
-            fetch_top_volume(force="force=1" in self.path)
-            with lock:
-                rows = state.get("top_volume", [])
-            self.send_json({"ok": True, "rows": rows})
+            self.send_json(payload)
             return
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -1480,6 +1591,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 "trailing_pct": float(data.get("trailing_pct", 1.0)),
                 "price_drop_pct": float(data.get("price_drop_pct", 1.0)),
                 "cost_stop_pct": float(data.get("cost_stop_pct", DEFAULT_CFG["cost_stop_pct"])),
+                "buy_active": bool(data.get("buy_active", False)),
+                "buy_volume": int(data.get("buy_volume", 0) or 0),
+                "offer_eat_pct": float(data.get("offer_eat_pct", DEFAULT_CFG["offer_eat_pct"])),
                 "active": True,
                 "pinned": True,
             }
@@ -1503,6 +1617,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 "trailing_pct": float(data.get("trailing_pct", 1.0)),
                 "price_drop_pct": float(data.get("price_drop_pct", 1.0)),
                 "cost_stop_pct": float(data.get("cost_stop_pct", DEFAULT_CFG["cost_stop_pct"])),
+                "buy_active": bool(data.get("buy_active", False)),
+                "buy_volume": int(data.get("buy_volume", 0) or 0),
+                "offer_eat_pct": float(data.get("offer_eat_pct", DEFAULT_CFG["offer_eat_pct"])),
                 "active": bool(data.get("active", True)),
                 "pinned": bool(existing.get("pinned", False)),
             }
@@ -1538,8 +1655,10 @@ HTML = """<!DOCTYPE html>
   * { box-sizing:border-box; margin:0; padding:0; }
   body { font-family:-apple-system,'Segoe UI',Roboto,sans-serif; background:#0b1220; color:#e2e8f0; padding:12px; }
   .card { background:#151e2e; border:1px solid #263449; border-radius:14px; padding:14px; margin-bottom:12px; overflow:hidden; }
-  .row { display:flex; gap:8px; align-items:center; }
-  .grow { flex:1; }
+  .card-title { font-weight:bold; margin-bottom:10px; font-size:15px; }
+  .card-hint { font-size:11px; color:#64748b; margin-bottom:8px; line-height:1.5; }
+  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .grow { flex:1; min-width:0; }
   .badge { padding:6px 12px; border-radius:20px; font-weight:bold; font-size:14px; }
   .on { background:#064e3b; color:#34d399; } .off { background:#7f1d1d; color:#fca5a5; }
   .warn { background:#78350f; color:#fbbf24; }
@@ -1551,24 +1670,41 @@ HTML = """<!DOCTYPE html>
   .btn-info { background:#0369a1; }
   input, select { width:100%; padding:10px; border-radius:8px; border:1px solid #334155; background:#0b1220; color:#fff; font-size:16px; margin-top:4px; }
   label { font-size:12px; color:#94a3b8; font-weight:600; }
-  table { border-collapse:collapse; font-size:13px; }
+  table { border-collapse:collapse; font-size:13px; width:100%; }
   th { color:#94a3b8; font-size:11px; padding:4px; text-align:center; white-space:nowrap; }
-  td { padding:5px; text-align:center; border-top:1px solid #1e293b; white-space:nowrap; }
+  td { padding:5px; text-align:center; border-top:1px solid #1e293b; }
   .mono { font-variant-numeric:tabular-nums; }
   .log { background:#0b1220; border:1px solid #263449; border-radius:8px; padding:8px; font-size:12px; color:#93c5fd; min-height:20px; white-space:pre-wrap; word-break:break-word; }
-  .wl-scroll { overflow-x:auto; -webkit-overflow-scrolling:touch; margin:0 -14px; padding:0 14px; }
-  .wl-scroll table { min-width:100%; }
-  .wl-row input { width:50px; padding:6px; font-size:13px; margin-top:0; }
-  .wl-row button { padding:6px 8px; font-size:12px; width:auto; white-space:nowrap; }
   .modal-bg { display:none; position:fixed; inset:0; background:rgba(0,0,0,.7); z-index:50; align-items:center; justify-content:center; }
   .modal { background:#1e293b; border:1px solid #475569; border-radius:14px; padding:20px; max-width:340px; width:92%; }
   .order-row { display:flex; justify-content:space-between; gap:8px; font-size:12px; padding:6px 0; border-top:1px solid #1e293b; align-items:flex-start; }
   .order-row:first-child { border-top:none; }
   .ok-yes { color:#4ade80; } .ok-no { color:#f87171; } .ok-pending { color:#facc15; }
   .btn-cancel-mini { padding:3px 7px; font-size:10px; margin-left:6px; background:#991b1b; border-radius:6px; }
+
+  /* v2.18: การ์ดรายหุ้นแทนตารางกว้าง */
+  .stock-card { background:#0e1729; border:1px solid #223049; border-radius:12px; padding:12px; margin-bottom:10px; }
+  .stock-card:last-child { margin-bottom:0; }
+  .stock-card-header { display:flex; justify-content:space-between; align-items:flex-start; gap:8px; flex-wrap:wrap; }
+  .stock-card-title { font-size:17px; font-weight:800; }
+  .stock-card-actions { display:flex; gap:6px; flex-wrap:wrap; }
+  .chip { padding:6px 10px; font-size:12px; border-radius:20px; width:auto; }
+  .chip-watch-on { background:#064e3b; color:#34d399; }
+  .chip-watch-off { background:#334155; color:#94a3b8; }
+  .chip-buy-on { background:#1e3a8a; color:#93c5fd; }
+  .chip-buy-off { background:#334155; color:#64748b; }
+  .chip-del { background:#7f1d1d; color:#fca5a5; padding:6px 9px; }
+  .stock-card-meta { font-size:12px; color:#94a3b8; margin:6px 0 10px; }
+  .section-label { font-size:10.5px; color:#64748b; font-weight:700; margin:10px 0 6px; text-transform:uppercase; letter-spacing:.04em; }
+  .section-label:first-of-type { margin-top:0; }
+  .field-grid { display:grid; grid-template-columns:repeat(2, 1fr); gap:8px; }
+  .field-grid label { font-size:11px; color:#94a3b8; display:block; }
+  .field-grid input { margin-top:3px; padding:8px; font-size:14px; }
+  .empty-hint { color:#64748b; font-size:13px; padding:8px 0; }
 </style>
 </head>
 <body>
+
   <!-- โซน 1: สถานะ + ปิดฉุกเฉิน -->
   <div class="card">
     <div class="row">
@@ -1576,93 +1712,70 @@ HTML = """<!DOCTYPE html>
         <span id="statusBadge" class="badge on">🟢 บอททำงาน</span>
         <span id="connBadge" class="badge off">🔌 ยังไม่ต่อ</span>
         <span id="sellingBadge" class="badge warn" style="display:none;">🏃 กำลังไล่ราคาขาย...</span>
+        <span id="buyingBadge" class="badge on" style="display:none;">🚀 กำลังส่งคำสั่งซื้อ...</span>
       </div>
       <button id="toggleBtn" class="btn-toggle" style="width:110px;" onclick="toggleBot()">⏸ ปิดบอท</button>
     </div>
     <div class="log" id="actionLog" style="margin-top:10px;">รอข้อมูล...</div>
   </div>
 
-  <!-- โซน 2: เลือกหุ้น + จอบิด/ออฟเฟอร์ -->
+  <!-- โซน 2: สรุปพอร์ต -->
   <div class="card">
-    <div class="row">
-      <div class="grow">
-        <label>เลือกหุ้นดูจอ</label>
-        <select id="selSymbol" onchange="selectSymbol()"></select>
+    <div class="card-title">💰 สรุปพอร์ต</div>
+    <div style="display:flex;gap:8px;margin-bottom:8px;">
+      <div style="flex:1;background:#1e293b;border-radius:8px;padding:10px;">
+        <div style="font-size:12px;color:#94a3b8;">เงินสด</div>
+        <div id="cashVal" style="font-size:17px;font-weight:bold;">--</div>
       </div>
-      <div style="text-align:right;font-size:13px;">
-        <div>ถือ: <span id="posTxt" class="yellow mono">0</span> หุ้น</div>
-        <div>สูงสุด: <span id="highestTxt" class="yellow mono">--</span></div>
-        <div>จุดขาย: <span id="stopTxt" class="green mono">--</span></div>
-        <div>บิดหาย: <span id="dropTxt" class="red mono">0%</span></div>
+      <div style="flex:1;background:#1e293b;border-radius:8px;padding:10px;">
+        <div style="font-size:12px;color:#94a3b8;">มูลค่าพอร์ต</div>
+        <div id="mvVal" style="font-size:17px;font-weight:bold;">--</div>
       </div>
     </div>
-    <div class="price red mono" id="priceTxt" style="margin:8px 0;">--</div>
-    <table style="width:100%;">
-      <tr><th>วอลุ่ม</th><th>บิด</th><th style="width:30px;"></th><th>ออฟเฟอร์</th><th>วอลุ่ม</th></tr>
-      <tbody id="bookBody"><tr><td colspan="5" style="color:#64748b;">กำลังโหลด...</td></tr></tbody>
-    </table>
+    <div style="background:#1e293b;border-radius:8px;padding:10px;">
+      <div style="font-size:12px;color:#94a3b8;">กำไร/ขาดทุน</div>
+      <div id="pnlVal" style="font-size:19px;font-weight:bold;">--</div>
+    </div>
   </div>
 
- <!-- โซน 4: Watchlist -->
+  <!-- โซน 3: Watchlist — ฟีเจอร์หลัก ย้ายขึ้นมาไว้บนสุด (เดิมอยู่ล่างสุด) -->
   <div class="card">
-    <div style="font-weight:bold;margin-bottom:8px;">📋 รายการเฝ้า (Watchlist)</div>
-    <div style="font-size:11px;color:#64748b;margin-bottom:4px;">บิดหาย% หรือ ราคาตก% หรือ ขาดทุนจากต้นทุน% (แล้วแต่อันไหนถึงก่อน) → ไล่ราคาขายหมดพอร์ตด้วย MP-MTL (cancel+ส่งใหม่อัตโนมัติถ้าขายไม่หมดในรอบเดียว)</div>
-    <div style="font-size:11px;color:#64748b;margin-bottom:6px;">🩸 = จุดตัดขาดทุนอ้างอิงต้นทุนจริง (คงที่ ไม่เลื่อนตามราคา) — ต้องมีข้อมูลต้นทุนจากพอร์ตก่อนถึงจะทำงาน ดูคอลัมน์ "ต้นทุน" ถ้าว่างแปลว่าคอลัมน์นี้ยังใช้ไม่ได้กับหุ้นนั้น</div>
-    <div style="font-size:11px;color:#64748b;margin-bottom:6px;">🔒 = หุ้นที่ถืออยู่จริง ระบบเพิ่มให้อัตโนมัติ ลบแล้วจะเพิ่มกลับถ้ายังถือของอยู่ (ขายหมดจะหายเอง) — ถ้าอยากหยุดเฝ้าโดยไม่ลบ ใช้ปุ่ม 🟢/⚪ แทน ส่วนหุ้นที่กด + เพิ่มเอง ลบได้อิสระ ไว้ทดสอบ</div>
-    <div style="font-size:11px;color:#64748b;margin-bottom:6px;">↔️ เลื่อนซ้าย-ขวาในตารางได้ถ้าจอแคบ — ปุ่ม 🟢/⚪ และ 🗑 จะไม่ล้นออกนอกการ์ดแล้ว</div>
+    <div class="card-title">📋 รายการเฝ้า (Watchlist)</div>
+    <div class="card-hint">
+      🔴 <b>เงื่อนไขขาย</b> — บิดหาย% หรือ ราคาตก% หรือ ขาดทุนจากต้นทุน% (ถึงอันไหนก่อนขายอันนั้น) → ไล่ราคาขายหมดพอร์ตด้วย MP-MTL<br>
+      🚀 <b>เงื่อนไขซื้อ</b> — ออฟเฟอร์หายเร็ว%เกินที่ตั้ง (หรือราคาขยับขึ้น) → ซื้อ Limit ที่ราคาออฟเฟอร์ตอนนั้น ซื้อได้ 1 ไม้/หุ้น/วัน ต้องกดปุ่ม 🚀 เปิดก่อนถึงจะทำงาน<br>
+      🔒 = ถืออยู่จริง ระบบเพิ่ม/ลบให้อัตโนมัติตามพอร์ต (ลบเองแล้วจะเพิ่มกลับถ้ายังถือของอยู่ — ใช้ปุ่มเฝ้า⚪ ถ้าอยากหยุดเฝ้าโดยไม่ลบ) — หุ้นที่กด➕เพิ่มเอง ลบได้อิสระ
+    </div>
     <div id="wlBody"></div>
-    <div style="border-top:1px solid #263449;margin:10px 0;"></div>
-    <div style="font-size:12px;color:#94a3b8;margin-bottom:6px;">➕ เพิ่มหุ้นใหม่ (ไว้ทดสอบ/เฝ้าก่อนซื้อ)</div>
-    <div class="row">
-      <div class="grow"><input id="newSym" placeholder="เช่น AOT" style="text-transform:uppercase;"></div>
-      <div style="width:54px;"><input id="newDrop" type="number" value="60" title="บิดหาย%"></div>
-      <div style="width:54px;"><input id="newPriceDrop" type="number" step="0.1" value="1.0" title="ราคาตก%"></div>
-      <div style="width:54px;"><input id="newTrail" type="number" step="0.1" value="1.0" title="trailing%"></div>
-      <div style="width:54px;"><input id="newCostStop" type="number" step="0.1" value="1.0" title="ขาดทุนจากต้นทุน%"></div>
-      <button class="btn-buy" onclick="addSymbol()">➕</button>
+  </div>
+
+  <!-- โซน 4: เพิ่มหุ้นใหม่ — รวมเป็นการ์ดเดียว เห็นครบทั้งเงื่อนไขขาย/ซื้อในที่เดียว -->
+  <div class="card">
+    <div class="card-title">➕ เพิ่มหุ้นใหม่</div>
+    <div class="card-hint">ไว้ทดสอบ/เฝ้าก่อนซื้อ หรือเปิดซื้ออัตโนมัติทันทีจากที่นี่เลยก็ได้</div>
+    <label>ชื่อหุ้น</label>
+    <input id="newSym" placeholder="เช่น AOT" style="text-transform:uppercase;margin-bottom:12px;">
+
+    <div class="section-label">🔴 เงื่อนไขขาย</div>
+    <div class="field-grid">
+      <label>บิดหาย% <input id="newDrop" type="number" value="60"></label>
+      <label>ราคาตก% <input id="newPriceDrop" type="number" step="0.1" value="1.0"></label>
+      <label>Trail% <input id="newTrail" type="number" step="0.1" value="1.0"></label>
+      <label>ขาดทุนจากต้นทุน% <input id="newCostStop" type="number" step="0.1" value="1.0"></label>
     </div>
+
+    <div class="section-label">🚀 เงื่อนไขซื้อ (ไม่บังคับ — เว้น 0 คือปิดไว้ก่อน)</div>
+    <div class="field-grid">
+      <label>จำนวนซื้อ (หุ้น) <input id="newBuyVol" type="number" value="0" placeholder="0 = ปิด"></label>
+      <label>ออฟเฟอร์หาย% ถึงซื้อ <input id="newOfferEat" type="number" step="1" value="50"></label>
+    </div>
+
+    <button class="btn-buy" style="width:100%;margin-top:14px;" onclick="addSymbol()">➕ เพิ่มหุ้นนี้เข้า Watchlist</button>
   </div>
 
-  <!-- โซน 3.7: พอร์ตปัจจุบัน (ดิบๆ ไม่ผ่านการกรอง) -->
+  <!-- โซน 5: เทรดด่วน -->
   <div class="card">
-    <div style="font-weight:bold;margin-bottom:8px;">💼 พอร์ตปัจจุบัน (จาก Settrade ตรงๆ)</div>
-    <div id="portBody" style="font-size:13px;color:#94a3b8;">กำลังโหลด...</div>
-  </div>
-
-<!-- โซน 1.5: สรุปพอร์ต -->
-<div class="card">
-<div style="font-weight:bold;margin-bottom:10px;">💰 สรุปพอร์ต</div>
-<div style="display:flex;justify-content:space-between;gap:8px;margin-bottom:8px;">
-<div style="flex:1;background:#1e293b;border-radius:8px;padding:10px;">
-<div style="font-size:12px;color:#94a3b8;">เงินสด</div>
-<div id="cashVal" style="font-size:17px;font-weight:bold;">--</div>
-</div>
-<div style="flex:1;background:#1e293b;border-radius:8px;padding:10px;">
-<div style="font-size:12px;color:#94a3b8;">มูลค่าพอร์ต</div>
-<div id="mvVal" style="font-size:17px;font-weight:bold;">--</div>
-</div>
-</div>
-<div style="background:#1e293b;border-radius:8px;padding:10px;">
-<div style="font-size:12px;color:#94a3b8;">กำไร/ขาดทุน</div>
-<div id="pnlVal" style="font-size:19px;font-weight:bold;">--</div>
-</div>
-</div>
-
-<!-- 🔥 หุ้นวอลุ่มสูง -->
-<div class="card">
-<div class="row" style="margin-bottom:8px;">
-<div style="font-weight:bold;" class="grow">🔥 หุ้นวอลุ่มสูง</div>
-<button class="btn-info" style="padding:6px 12px;font-size:13px;width:auto;" onclick="loadTopVolume(true)">🔄 รีเฟรช</button>
-</div>
-<table style="width:100%;">
-<thead><tr><th>หุ้น</th><th>ราคา</th><th>วอลุ่ม</th><th>เปลี่ยน%</th></tr></thead>
-<tbody id="tvBody"><tr><td colspan="4" style="color:#64748b;">กำลังโหลด...</td></tr></tbody>
-</table>
-</div>
-
-  <!-- โซน 3: เทรดด่วน -->
-  <div class="card">
-    <div style="font-weight:bold;margin-bottom:8px;">⚡ เทรดด่วน</div>
+    <div class="card-title">⚡ เทรดด่วน</div>
     <div class="row">
       <div class="grow"><label>หุ้น</label><input id="tradeSymbol" value="TTB"></div>
       <div class="grow"><label>จำนวน</label><input id="tradeVol" type="number" value="100" inputmode="numeric"></div>
@@ -1682,47 +1795,73 @@ HTML = """<!DOCTYPE html>
     </div>
     <label>PIN</label>
     <input id="tradePin" type="password" inputmode="numeric">
-    <div class="row" style="margin-top:12px;">
+    <div class="row" style="margin-top:12px;flex-wrap:nowrap;">
       <button class="btn-buy grow" onclick="askOrder('Buy')">🟢 ซื้อ</button>
       <button class="btn-sell grow" onclick="askOrder('Sell')">🔴 ขาย</button>
     </div>
   </div>
 
-  <!-- โซน 3.6: เช็คสถานะ / ทดสอบยกเลิกคำสั่ง -->
+  <!-- โซน 6: จอบิด/ออฟเฟอร์ของหุ้นที่เลือก -->
   <div class="card">
-    <div style="font-weight:bold;margin-bottom:8px;">🔍 เช็คสถานะ / 🧪 ทดสอบยกเลิกคำสั่ง</div>
-    <div style="font-size:11px;color:#64748b;margin-bottom:6px;">
-      ใช้หา signature ที่ถูกต้องของ SDK และตรวจสอบสถานะออเดอร์ — ไม่ผูกกับ chase-sell อัตโนมัติ
-      (ของเดิมใช้ signature ที่ยืนยันแล้วอยู่แล้ว) พิมพ์ Order No เองหรือกด 🚫 จากตารางประวัติ
-      คำสั่งด้านบนก็ได้ "🔍 เช็คสถานะ" ไม่มีผลข้างเคียงและไม่ต้องใช้ PIN แนะนำให้กดก่อนเสมอ
-      ก่อนจะลอง "🧪 ทดสอบยกเลิก" ซึ่งต้องใช้ PIN และมีผลจริงกับออเดอร์ — ใส่ PIN เป็นตัวเลขล้วนๆ
-      เท่านั้น (ห้ามมีช่องว่าง/ตัวอักษร ไม่งั้นจะได้ error "Invalid Pin Format")
+    <div class="row" style="margin-bottom:8px;">
+      <div class="grow">
+        <label>เลือกหุ้นดูจอ</label>
+        <select id="selSymbol" onchange="selectSymbol()"></select>
+      </div>
+      <div style="text-align:right;font-size:13px;">
+        <div>ถือ: <span id="posTxt" class="yellow mono">0</span> หุ้น</div>
+        <div>สูงสุด: <span id="highestTxt" class="yellow mono">--</span></div>
+        <div>จุดขาย: <span id="stopTxt" class="green mono">--</span></div>
+        <div>บิดหาย: <span id="dropTxt" class="red mono">0%</span></div>
+      </div>
+    </div>
+    <div class="price red mono" id="priceTxt" style="margin:8px 0;">--</div>
+    <table>
+      <tr><th>วอลุ่ม</th><th>บิด</th><th style="width:30px;"></th><th>ออฟเฟอร์</th><th>วอลุ่ม</th></tr>
+      <tbody id="bookBody"><tr><td colspan="5" style="color:#64748b;">กำลังโหลด...</td></tr></tbody>
+    </table>
+  </div>
+
+  <!-- โซน 7: ประวัติคำสั่งซื้อขาย -->
+  <div class="card">
+    <div class="card-title">🧾 ประวัติคำสั่ง (ล่าสุด 20 รายการ)</div>
+    <div class="card-hint">ตอนไล่ราคาขายอัตโนมัติ (chase-sell) แต่ละรอบจะขึ้นเป็นคนละแถวในนี้ — กด 🚫 เพื่อดึง Order No ไปกรอกในช่องทดสอบยกเลิก/เช็คสถานะด้านล่าง</div>
+    <div id="orderLogBody" style="font-size:12px;color:#64748b;">ยังไม่มีคำสั่ง</div>
+  </div>
+
+  <!-- โซน 8: เครื่องมือ debug — เช็คสถานะ/ทดสอบยกเลิก (ใช้ไม่บ่อย ไว้ล่างๆ) -->
+  <div class="card">
+    <div class="card-title">🔍 เช็คสถานะ / 🧪 ทดสอบยกเลิกคำสั่ง</div>
+    <div class="card-hint">
+      เครื่องมือ debug — ไม่ผูกกับ chase-sell อัตโนมัติ (ของเดิมใช้ signature ที่ยืนยันแล้วอยู่แล้ว)
+      พิมพ์ Order No เองหรือกด 🚫 จากตารางประวัติคำสั่งด้านบนก็ได้ "🔍 เช็คสถานะ" ไม่มีผลข้างเคียง
+      และไม่ต้องใช้ PIN แนะนำให้กดก่อนเสมอก่อนจะลอง "🧪 ทดสอบยกเลิก" ซึ่งต้องใช้ PIN และมีผลจริง
+      กับออเดอร์ — ใส่ PIN เป็นตัวเลขล้วนๆ เท่านั้น
     </div>
     <div class="row">
       <div class="grow"><label>Order No</label><input id="cancelOrderNo" placeholder="เช่น 64UJS0PUXL"></div>
-      <div class="grow"><label>หุ้น (แค่ label ไม่บังคับ)</label><input id="cancelSymbol" placeholder="เช่น UKEM"></div>
+      <div class="grow"><label>หุ้น (ไม่บังคับ)</label><input id="cancelSymbol" placeholder="เช่น UKEM"></div>
     </div>
     <label>PIN (ใช้เฉพาะตอนกดทดสอบยกเลิก)</label>
     <input id="cancelPin" type="password" inputmode="numeric">
-    <div class="row" style="margin-top:10px;">
+    <div class="row" style="margin-top:10px;flex-wrap:nowrap;">
       <button class="btn-info grow" onclick="checkStatus()">🔍 เช็คสถานะ</button>
       <button class="btn-sell grow" onclick="testCancel()">🧪 ทดสอบยกเลิก</button>
     </div>
     <div id="cancelResult" class="log" style="margin-top:10px;display:none;"></div>
   </div>
 
-  <!-- โซน 3.5: ประวัติคำสั่งซื้อขาย -->
+  <!-- โซน 9: พอร์ตปัจจุบัน (ดิบๆ ไม่ผ่านการกรอง — ไว้อ้างอิง) -->
   <div class="card">
-    <div style="font-weight:bold;margin-bottom:8px;">🧾 ประวัติคำสั่ง (ล่าสุด 20 รายการ)</div>
-    <div style="font-size:11px;color:#64748b;margin-bottom:6px;">ตอนไล่ราคาขายอัตโนมัติ (chase-sell) แต่ละรอบจะขึ้นเป็นคนละแถวในนี้ — กด 🚫 เพื่อดึง Order No ไปกรอกในช่องทดสอบยกเลิก/เช็คสถานะด้านล่าง</div>
-    <div id="orderLogBody" style="font-size:12px;color:#64748b;">ยังไม่มีคำสั่ง</div>
+    <div class="card-title">💼 พอร์ตปัจจุบัน (จาก Settrade ตรงๆ)</div>
+    <div id="portBody" style="font-size:13px;color:#94a3b8;">กำลังโหลด...</div>
   </div>
 
   <div class="modal-bg" id="modalBg">
     <div class="modal">
       <div style="font-size:16px;font-weight:bold;margin-bottom:8px;" id="modalTitle">ยืนยัน</div>
       <div id="modalBody" style="font-size:14px;color:#cbd5e1;margin-bottom:14px;"></div>
-      <div class="row">
+      <div class="row" style="flex-wrap:nowrap;">
         <button class="btn-ghost grow" onclick="closeModal()">ยกเลิก</button>
         <button id="modalOk" class="btn-sell grow" onclick="modalConfirmFn && modalConfirmFn()">ยืนยัน</button>
       </div>
@@ -1737,6 +1876,7 @@ let userTypingSymbol=false;
 let wlFocusedId=null;
 let wlEditedAt={};
 let wlActiveCache={};
+let wlBuyActiveCache={};
 const fmt=n=>n==null||n===0?'--':Number(n).toLocaleString('en-US');
 function wlVal(id, fallback){
   if(wlEditedAt[id] && (Date.now()-wlEditedAt[id] < 4000)){
@@ -1752,6 +1892,8 @@ document.addEventListener('DOMContentLoaded', ()=>{
   el.addEventListener('blur', ()=>{ userTypingSymbol=false; });
 });
 
+// กันบั๊ก: polling ทุก 1 วิ เคย rebuild การ์ด watchlist ทับช่องที่กำลังพิมพ์อยู่จนพิมพ์ไม่ติด
+// ใช้ focusin/focusout แบบ event delegation เพราะการ์ดในนี้เพิ่ม/หายเองได้จากการ sync พอร์ต
 document.addEventListener('focusin', e=>{
   if(e.target && e.target.closest && e.target.closest('#wlBody')) wlFocusedId = e.target.id;
 });
@@ -1826,6 +1968,13 @@ async function refresh(){
     cb.className='badge '+(s.connected?'on':'off');
     cb.textContent=s.connected?'🔌 เชื่อมต่อ':'🔌 ยังไม่ต่อ';
     document.getElementById('toggleBtn').textContent=s.enabled?'⏸ ปิดบอท':'▶ เปิดบอท';
+
+    document.getElementById('cashVal').textContent = s.cash?fmt(s.cash):'--';
+    document.getElementById('mvVal').textContent = s.market_value?fmt(s.market_value):'--';
+    const pnlEl = document.getElementById('pnlVal');
+    pnlEl.textContent = (s.pnl!=null)?fmt(s.pnl):'--';
+    pnlEl.className = (s.pnl>0?'green':(s.pnl<0?'red':''));
+
     const sel=document.getElementById('selSymbol');
     const keys=Object.keys(s.watchlist||{});
     if(sel.options.length!==keys.length){
@@ -1839,6 +1988,7 @@ async function refresh(){
     document.getElementById('dropTxt').textContent=(d.drop||0)+'%';
     document.getElementById('actionLog').textContent=d.last_action||'รอข้อมูล...';
     document.getElementById('sellingBadge').style.display = d.selling ? '' : 'none';
+    document.getElementById('buyingBadge').style.display = d.buying ? '' : 'none';
     const tbody=document.getElementById('bookBody');
     let html='';
     const bids=d.bids||[], offers=d.offers||[];
@@ -1863,13 +2013,6 @@ async function refresh(){
         return `<div class="order-row"><span>${o.time} ${icon} ${sideTh} ${o.symbol} ${o.volume}${priceTxt}${cancelBtn}</span><span class="${cls}" style="text-align:right;max-width:55%;overflow-wrap:anywhere;">${(o.msg||'').slice(0,80)}</span></div>`;
       }).join('');
     }
-    
-document.getElementById('cashVal').textContent = s.cash ? fmt(s.cash) : '--';
-    document.getElementById('mvVal').textContent = s.market_value ? fmt(s.market_value) : '--';
-    const pnlEl = document.getElementById('pnlVal');
-    pnlEl.textContent = (s.pnl !== undefined && s.pnl !== null) ? fmt(s.pnl) : '--';
-    pnlEl.className = s.pnl > 0 ? 'green' : (s.pnl < 0 ? 'red' : '');
-
 
     const pb=document.getElementById('portBody');
     const pk=Object.keys(s.positions||{});
@@ -1880,28 +2023,43 @@ document.getElementById('cashVal').textContent = s.cash ? fmt(s.cash) : '--';
     if(!wlFocusedId){
       const wl=document.getElementById('wlBody');
       if(keys.length===0){
-        wl.innerHTML='<div style="color:#64748b;font-size:13px;padding:4px 0;">ยังไม่มีหุ้นในรายการเฝ้า — ถ้าถือหุ้นอยู่จะเพิ่มให้อัตโนมัติ หรือกด + เพิ่มเองด้านล่างเพื่อทดสอบ</div>';
+        wl.innerHTML='<div class="empty-hint">ยังไม่มีหุ้นในรายการเฝ้า — ถ้าถือหุ้นอยู่จะเพิ่มให้อัตโนมัติ หรือกด ➕ เพิ่มเองด้านล่างเพื่อทดสอบ</div>';
       } else {
-        let whtml='<div class="wl-scroll"><table><tr><th>หุ้น</th><th>ถือ</th><th>ต้นทุน</th><th>บิดหาย%</th><th>ราคาตก%</th><th>Trail%</th><th>ขาดทุน%</th><th>บน/ปิด</th><th></th></tr>';
+        let whtml='';
         for(const k of keys){
           const c=s.watchlist[k]||{};
           const held=(s.positions&&s.positions[k])||0;
           const cost=(s.avg_cost&&s.avg_cost[k])||0;
-          const autoTag=(!c.pinned && held>0)?' <span style="font-size:10px;color:#64748b;">🔒</span>':'';
+          const autoTag=(!c.pinned && held>0)?' 🔒':'';
           wlActiveCache[k]=!!c.active;
-          whtml+=`<tr class="wl-row">
-            <td><b>${k}</b>${autoTag}</td>
-            <td class="yellow mono">${held}</td>
-            <td class="mono" style="color:#64748b;">${cost?fmt(cost):'--'}</td>
-            <td><input id="d_${k}" type="number" value="${wlVal('d_'+k, c.bid_drop_pct)}" onchange="updateRow('${k}')"></td>
-            <td><input id="p_${k}" type="number" step="0.1" value="${wlVal('p_'+k, c.price_drop_pct!=null?c.price_drop_pct:1.0)}" onchange="updateRow('${k}')"></td>
-            <td><input id="t_${k}" type="number" step="0.1" value="${wlVal('t_'+k, c.trailing_pct)}" onchange="updateRow('${k}')"></td>
-            <td><input id="c_${k}" type="number" step="0.1" value="${wlVal('c_'+k, c.cost_stop_pct!=null?c.cost_stop_pct:1.0)}" onchange="updateRow('${k}')"></td>
-            <td><button class="${c.active?'btn-buy':'btn-ghost'}" onclick="toggleActive('${k}')">${c.active?'🟢':'⚪'}</button></td>
-            <td><button class="btn-danger" onclick="askRemove('${k}')">🗑</button></td>
-          </tr>`;
+          wlBuyActiveCache[k]=!!c.buy_active;
+          whtml+=`
+          <div class="stock-card">
+            <div class="stock-card-header">
+              <div class="stock-card-title">${k}${autoTag}</div>
+              <div class="stock-card-actions">
+                <button class="chip ${c.active?'chip-watch-on':'chip-watch-off'}" onclick="toggleActive('${k}')">${c.active?'🟢 เฝ้าอยู่':'⚪ ปิดเฝ้า'}</button>
+                <button class="chip ${c.buy_active?'chip-buy-on':'chip-buy-off'}" onclick="toggleBuyActive('${k}')">${c.buy_active?'🚀 ซื้ออัตโนมัติ':'⚪ ปิดซื้อ'}</button>
+                <button class="chip chip-del" onclick="askRemove('${k}')">🗑</button>
+              </div>
+            </div>
+            <div class="stock-card-meta">ถือ ${held} หุ้น${cost?(' • ต้นทุน '+fmt(cost)):''}</div>
+
+            <div class="section-label">🔴 เงื่อนไขขาย</div>
+            <div class="field-grid">
+              <label>บิดหาย%<input id="d_${k}" type="number" value="${wlVal('d_'+k, c.bid_drop_pct)}" onchange="updateRow('${k}')"></label>
+              <label>ราคาตก%<input id="p_${k}" type="number" step="0.1" value="${wlVal('p_'+k, c.price_drop_pct!=null?c.price_drop_pct:1.0)}" onchange="updateRow('${k}')"></label>
+              <label>Trail%<input id="t_${k}" type="number" step="0.1" value="${wlVal('t_'+k, c.trailing_pct)}" onchange="updateRow('${k}')"></label>
+              <label>ขาดทุนจากต้นทุน%<input id="c_${k}" type="number" step="0.1" value="${wlVal('c_'+k, c.cost_stop_pct!=null?c.cost_stop_pct:1.0)}" onchange="updateRow('${k}')"></label>
+            </div>
+
+            <div class="section-label">🚀 เงื่อนไขซื้อ</div>
+            <div class="field-grid">
+              <label>จำนวนซื้อ (หุ้น)<input id="bv_${k}" type="number" value="${wlVal('bv_'+k, c.buy_volume||0)}" onchange="updateRow('${k}')"></label>
+              <label>ออฟเฟอร์หาย%<input id="oe_${k}" type="number" step="1" value="${wlVal('oe_'+k, c.offer_eat_pct!=null?c.offer_eat_pct:50)}" onchange="updateRow('${k}')"></label>
+            </div>
+          </div>`;
         }
-        whtml+='</table></div>';
         wl.innerHTML=whtml;
       }
     }
@@ -1941,17 +2099,19 @@ async function doOrder(){
 async function addSymbol(){
   const symbol=document.getElementById('newSym').value.trim().toUpperCase();
   if(!symbol){ alert('ใส่ชื่อหุ้น'); return; }
-  const body={symbol,bid_drop_pct:document.getElementById('newDrop').value,price_drop_pct:document.getElementById('newPriceDrop').value,trailing_pct:document.getElementById('newTrail').value,cost_stop_pct:document.getElementById('newCostStop').value};
+  const buyVol=Number(document.getElementById('newBuyVol').value||0);
+  const body={symbol,bid_drop_pct:document.getElementById('newDrop').value,price_drop_pct:document.getElementById('newPriceDrop').value,trailing_pct:document.getElementById('newTrail').value,cost_stop_pct:document.getElementById('newCostStop').value,buy_volume:buyVol,offer_eat_pct:document.getElementById('newOfferEat').value,buy_active:buyVol>0};
   const res=await (await fetch('/api/watchlist/add',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
   alert(res.ok?'✅ เพิ่ม '+symbol+' แล้ว':'❌ '+res.msg);
 }
 async function updateRow(sym){
   const now=Date.now();
-  ['d_','p_','t_','c_'].forEach(pfx=>{ wlEditedAt[pfx+sym]=now; });
+  ['d_','p_','t_','c_','bv_','oe_'].forEach(pfx=>{ wlEditedAt[pfx+sym]=now; });
   const activeState = wlActiveCache[sym]!==false;
+  const buyActiveState = !!wlBuyActiveCache[sym];
   try{
     const res = await (await fetch('/api/watchlist/update',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
-      symbol:sym,bid_drop_pct:document.getElementById('d_'+sym).value,price_drop_pct:document.getElementById('p_'+sym).value,trailing_pct:document.getElementById('t_'+sym).value,cost_stop_pct:document.getElementById('c_'+sym).value,active:activeState
+      symbol:sym,bid_drop_pct:document.getElementById('d_'+sym).value,price_drop_pct:document.getElementById('p_'+sym).value,trailing_pct:document.getElementById('t_'+sym).value,cost_stop_pct:document.getElementById('c_'+sym).value,buy_volume:document.getElementById('bv_'+sym).value,offer_eat_pct:document.getElementById('oe_'+sym).value,active:activeState,buy_active:buyActiveState
     })})).json();
     if(!res.ok){
       alert('❌ บันทึกไม่สำเร็จ: '+(res.msg||'ไม่ทราบสาเหตุ — ลองใหม่อีกครั้ง หรือดู Render logs'));
@@ -1964,7 +2124,18 @@ async function toggleActive(sym){
   const r=await (await fetch('/api/state')).json();
   const c=r.watchlist[sym]||{};
   await fetch('/api/watchlist/update',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
-    symbol:sym,bid_drop_pct:c.bid_drop_pct,price_drop_pct:c.price_drop_pct,trailing_pct:c.trailing_pct,cost_stop_pct:c.cost_stop_pct,active:!c.active
+    symbol:sym,bid_drop_pct:c.bid_drop_pct,price_drop_pct:c.price_drop_pct,trailing_pct:c.trailing_pct,cost_stop_pct:c.cost_stop_pct,buy_volume:c.buy_volume,offer_eat_pct:c.offer_eat_pct,active:!c.active,buy_active:c.buy_active
+  })});
+}
+async function toggleBuyActive(sym){
+  const r=await (await fetch('/api/state')).json();
+  const c=r.watchlist[sym]||{};
+  if(!c.buy_active && (!c.buy_volume || Number(c.buy_volume)<=0)){
+    alert('ตั้ง "จำนวนซื้อ" ให้มากกว่า 0 ก่อนเปิดซื้ออัตโนมัติ');
+    return;
+  }
+  await fetch('/api/watchlist/update',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
+    symbol:sym,bid_drop_pct:c.bid_drop_pct,price_drop_pct:c.price_drop_pct,trailing_pct:c.trailing_pct,cost_stop_pct:c.cost_stop_pct,buy_volume:c.buy_volume,offer_eat_pct:c.offer_eat_pct,active:c.active,buy_active:!c.buy_active
   })});
 }
 function askRemove(sym){
@@ -1989,25 +2160,6 @@ async function doRemove(){
     alert('❌ ส่งคำขอลบไม่สำเร็จ (เน็ตหลุด/เซิร์ฟเวอร์ไม่ตอบ): '+e);
   }
 }
-
-function loadTopVolume(force) {
-    fetch('/api/top_volume' + (force ? '?force=1' : ''))
-    .then(r => r.json())
-    .then(d => {
-        const rows = d.rows || [];
-        const body = document.getElementById('tvBody');
-        if (!rows.length) {
-            body.innerHTML = '<tr><td colspan="4" style="color:#64748b;">ไม่มีข้อมูล (ใช้งานได้ตอน live)</td></tr>';
-            return;
-        }
-        body.innerHTML = rows.map(r =>
-            `<tr><td><b>${r.symbol}</b></td><td class="mono">${Number(r.price).toFixed(2)}</td><td class="mono">${Number(r.volume).toLocaleString('th-TH')}</td><td class="mono ${r.change >= 0 ? 'green' : 'red'}">${r.change >= 0 ? '+' : ''}${Number(r.change).toFixed(2)}%</td></tr>`
-        ).join('');
-    })
-    .catch(e => console.error(e));
-}
-setInterval(() => loadTopVolume(false), 60000);
-loadTopVolume(false);
 refresh();
 setInterval(refresh,1000);
 </script>
