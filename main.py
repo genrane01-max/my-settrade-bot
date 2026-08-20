@@ -1838,44 +1838,6 @@ HTML = """<!DOCTYPE html>
     <div class="log" id="actionLog" style="margin-top:10px;">รอข้อมูล...</div>
   </div>
 
-  <!-- โซน 6: จอบิด/ออฟเฟอร์ของหุ้นที่เลือก -->
-  <div class="card">
-    <div class="row" style="margin-bottom:8px;">
-      <div class="grow">
-        <label>เลือกหุ้นดูจอ</label>
-        <select id="selSymbol" onchange="selectSymbol()"></select>
-      </div>
-      <div style="text-align:right;font-size:13px;">
-        <div>ถือ: <span id="posTxt" class="yellow mono">0</span> หุ้น</div>
-        <div>สูงสุด: <span id="highestTxt" class="yellow mono">--</span></div>
-        <div>จุดขาย: <span id="stopTxt" class="green mono">--</span></div>
-        <div>บิดหาย: <span id="dropTxt" class="red mono">0%</span></div>
-      </div>
-    </div>
-    <div class="price red mono" id="priceTxt" style="margin:8px 0;">--</div>
-    <table>
-      <tr><th>วอลุ่ม</th><th>บิด</th><th style="width:30px;"></th><th>ออฟเฟอร์</th><th>วอลุ่ม</th></tr>
-      <tbody id="bookBody"><tr><td colspan="5" style="color:#64748b;">กำลังโหลด...</td></tr></tbody>
-    </table>
-  </div>
-
-  <!-- โซน 3: Watchlist — ฟีเจอร์หลัก ย้ายขึ้นมาไว้บนสุด (เดิมอยู่ล่างสุด) -->
-  <div class="card">
-    <div class="card-title">📋 รายการเฝ้า (Watchlist)</div>
-    <div class="card-hint">
-      🔴 <b>เงื่อนไขขาย</b> — บิดหาย% หรือ ราคาตก% หรือ ขาดทุนจากต้นทุน% (ถึงอันไหนก่อนขายอันนั้น) → ไล่ราคาขายหมดพอร์ตด้วย MP-MTL<br>
-      🚀 <b>เงื่อนไขซื้อ</b> — ออฟเฟอร์หายเร็ว%เกินที่ตั้ง (หรือราคาขยับขึ้น) → ซื้อ Limit ที่ราคาออฟเฟอร์ตอนนั้น ซื้อได้ 1 ไม้/หุ้น/วัน ต้องกดปุ่ม 🚀 เปิดก่อนถึงจะทำงาน<br>
-      🔒 = ถืออยู่จริง ระบบเพิ่ม/ลบให้อัตโนมัติตามพอร์ต (ลบเองแล้วจะเพิ่มกลับถ้ายังถือของอยู่ — ใช้ปุ่มเฝ้า⚪ ถ้าอยากหยุดเฝ้าโดยไม่ลบ) — หุ้นที่กด➕เพิ่มเอง ลบได้อิสระ
-    </div>
-    <div id="wlBody"></div>
-  </div>
-
-  <!-- โซน 9: พอร์ตปัจจุบัน (ดิบๆ ไม่ผ่านการกรอง — ไว้อ้างอิง) -->
-  <div class="card">
-    <div class="card-title">💼 พอร์ตปัจจุบัน (จาก Settrade ตรงๆ)</div>
-    <div id="portBody" style="font-size:13px;color:#94a3b8;">กำลังโหลด...</div>
-  </div>
-
   <!-- โซน 2: สรุปพอร์ต -->
   <div class="card">
     <div class="card-title">💰 สรุปพอร์ต</div>
@@ -1893,6 +1855,17 @@ HTML = """<!DOCTYPE html>
       <div style="font-size:12px;color:#94a3b8;">กำไร/ขาดทุน</div>
       <div id="pnlVal" style="font-size:19px;font-weight:bold;">--</div>
     </div>
+  </div>
+
+  <!-- โซน 3: Watchlist — ฟีเจอร์หลัก ย้ายขึ้นมาไว้บนสุด (เดิมอยู่ล่างสุด) -->
+  <div class="card">
+    <div class="card-title">📋 รายการเฝ้า (Watchlist)</div>
+    <div class="card-hint">
+      🔴 <b>เงื่อนไขขาย</b> — บิดหาย% หรือ ราคาตก% หรือ ขาดทุนจากต้นทุน% (ถึงอันไหนก่อนขายอันนั้น) → ไล่ราคาขายหมดพอร์ตด้วย MP-MTL<br>
+      🚀 <b>เงื่อนไขซื้อ</b> — ออฟเฟอร์หายเร็ว%เกินที่ตั้ง (หรือราคาขยับขึ้น) → ซื้อ Limit ที่ราคาออฟเฟอร์ตอนนั้น ซื้อได้ 1 ไม้/หุ้น/วัน ต้องกดปุ่ม 🚀 เปิดก่อนถึงจะทำงาน<br>
+      🔒 = ถืออยู่จริง ระบบเพิ่ม/ลบให้อัตโนมัติตามพอร์ต (ลบเองแล้วจะเพิ่มกลับถ้ายังถือของอยู่ — ใช้ปุ่มเฝ้า⚪ ถ้าอยากหยุดเฝ้าโดยไม่ลบ) — หุ้นที่กด➕เพิ่มเอง ลบได้อิสระ
+    </div>
+    <div id="wlBody"></div>
   </div>
 
   <!-- โซน 4: เพิ่มหุ้นใหม่ — รวมเป็นการ์ดเดียว เห็นครบทั้งเงื่อนไขขาย/ซื้อในที่เดียว -->
@@ -1947,6 +1920,27 @@ HTML = """<!DOCTYPE html>
     </div>
   </div>
 
+  <!-- โซน 6: จอบิด/ออฟเฟอร์ของหุ้นที่เลือก -->
+  <div class="card">
+    <div class="row" style="margin-bottom:8px;">
+      <div class="grow">
+        <label>เลือกหุ้นดูจอ</label>
+        <select id="selSymbol" onchange="selectSymbol()"></select>
+      </div>
+      <div style="text-align:right;font-size:13px;">
+        <div>ถือ: <span id="posTxt" class="yellow mono">0</span> หุ้น</div>
+        <div>สูงสุด: <span id="highestTxt" class="yellow mono">--</span></div>
+        <div>จุดขาย: <span id="stopTxt" class="green mono">--</span></div>
+        <div>บิดหาย: <span id="dropTxt" class="red mono">0%</span></div>
+      </div>
+    </div>
+    <div class="price red mono" id="priceTxt" style="margin:8px 0;">--</div>
+    <table>
+      <tr><th>วอลุ่ม</th><th>บิด</th><th style="width:30px;"></th><th>ออฟเฟอร์</th><th>วอลุ่ม</th></tr>
+      <tbody id="bookBody"><tr><td colspan="5" style="color:#64748b;">กำลังโหลด...</td></tr></tbody>
+    </table>
+  </div>
+
   <!-- โซน 7: ประวัติคำสั่งซื้อขาย -->
   <div class="card">
     <div class="card-title">🧾 ประวัติคำสั่ง (ล่าสุด 20 รายการ)</div>
@@ -1974,6 +1968,12 @@ HTML = """<!DOCTYPE html>
       <button class="btn-sell grow" onclick="testCancel()">🧪 ทดสอบยกเลิก</button>
     </div>
     <div id="cancelResult" class="log" style="margin-top:10px;display:none;"></div>
+  </div>
+
+  <!-- โซน 9: พอร์ตปัจจุบัน (ดิบๆ ไม่ผ่านการกรอง — ไว้อ้างอิง) -->
+  <div class="card">
+    <div class="card-title">💼 พอร์ตปัจจุบัน (จาก Settrade ตรงๆ)</div>
+    <div id="portBody" style="font-size:13px;color:#94a3b8;">กำลังโหลด...</div>
   </div>
 
   <div class="modal-bg" id="modalBg">
