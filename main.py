@@ -1471,6 +1471,18 @@ def session_keeper():
             logger.error(f"session_keeper error: {e}")
         time.sleep(30)
 
+def _is_pre_market_query_window():
+    """
+    อนุญาตให้ query พอร์ต/บัญชีได้ตั้งแต่ 9:00 เป็นต้นไป (ก่อนตลาดเปิดจริง ~55 นาที
+    พอสำหรับเตรียมข้อมูล) — ตัดการยิง query รัวๆ ช่วงตี 5-9 โมงที่ไม่จำเป็นออกไป
+    ลดความถี่ที่ทำให้ WAF สงสัยว่าเป็นบอท
+    """
+    now = get_bkk_now()
+    if now.weekday() >= 5:
+        return False
+    hm = now.hour * 60 + now.minute
+    return hm >= 9 * 60  # ตั้งแต่ 9:00
+
 def bot_loop():
     global _last_trading_date, _last_watchlist_load
     while True:
@@ -1495,8 +1507,10 @@ def bot_loop():
             with lock:
                 active_syms = [s for s, c in state["watchlist"].items() if c.get("active", True)]
             ensure_subscribe(active_syms)
-            refresh_positions()
-            sync_watchlist_with_portfolio()
+
+            if _is_pre_market_query_window():
+                refresh_positions()
+                sync_watchlist_with_portfolio()
             check_and_autosell_all()
         except Exception as e:
             logger.error(f"Bot Loop Error: {e}")
