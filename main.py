@@ -1870,6 +1870,12 @@ HTML = """<!DOCTYPE html>
     <div id="wlBody"></div>
   </div>
 
+  <!-- โซน 9: พอร์ตปัจจุบัน (ดิบๆ ไม่ผ่านการกรอง — ไว้อ้างอิง) -->
+  <div class="card">
+    <div class="card-title">💼 พอร์ตปัจจุบัน (จาก Settrade ตรงๆ)</div>
+    <div id="portBody" style="font-size:13px;color:#94a3b8;">กำลังโหลด...</div>
+  </div>
+
   <!-- โซน 2: สรุปพอร์ต -->
   <div class="card">
     <div class="card-title">💰 สรุปพอร์ต</div>
@@ -1968,12 +1974,6 @@ HTML = """<!DOCTYPE html>
       <button class="btn-sell grow" onclick="testCancel()">🧪 ทดสอบยกเลิก</button>
     </div>
     <div id="cancelResult" class="log" style="margin-top:10px;display:none;"></div>
-  </div>
-
-  <!-- โซน 9: พอร์ตปัจจุบัน (ดิบๆ ไม่ผ่านการกรอง — ไว้อ้างอิง) -->
-  <div class="card">
-    <div class="card-title">💼 พอร์ตปัจจุบัน (จาก Settrade ตรงๆ)</div>
-    <div id="portBody" style="font-size:13px;color:#94a3b8;">กำลังโหลด...</div>
   </div>
 
   <div class="modal-bg" id="modalBg">
