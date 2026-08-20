@@ -505,15 +505,35 @@ def refresh_positions(force=False):
                 logger.warning(f"[get_portfolio] ได้ raw data กลับมาแต่แปลงเป็น position ไม่ได้: {str(raw)[:500]}")
 
         with lock:                                      # เยื้อง 8
+            # v2.20 แก้ race condition: ไม่เขียนทับตัวเลขหุ้นที่ "กำลังไล่ราคาขาย" (selling=
+            # True) อยู่ ด้วยค่าจาก Settrade รอบนี้ — เพราะ API ของ Settrade อาจยังอัปเดต
+            # ไม่ทันการขายที่ chase-sell เพิ่งหักไปเองแบบสดๆ (ดู _sell_chase_worker) ถ้าปล่อย
+            # ให้เขียนทับ อาจได้ตัวเลขเก่า(สูงกว่าจริง)กลับมาแทนที่ตัวเลขที่หักไปแล้วถูกต้อง
+            # แล้ว ระหว่าง selling=True เราเชื่อค่าที่ chase-sell หักเองมากกว่า เพราะมันตาม
+            # ติดสถานะคำสั่งแบบสดๆ อยู่แล้ว รอบ refresh ปกติ (30 วิ) จะกลับมาซิงก์ให้ถูกต้อง
+            # เองหลัง selling กลับเป็น False แล้ว (ไม่มีอะไรค้างตลอดไป)
+            for sym, s in state["symbols"].items():
+                if s.get("selling") and sym in state["positions"]:
+                    pos[sym] = state["positions"][sym]
             state["positions"] = pos                    # เยื้อง 12
             state["avg_cost"] = avg_cost                # เยื้อง 12
             state["pos_updated"] = now                  # เยื้อง 12
-        refresh_account_summary()                       # เยื้อง 8 ← ต้องอยู่ตรงนี้!
+        # v2.19: ส่ง raw ที่เพิ่งดึงมาสดๆ ต่อให้เลย ไม่ต้องให้ refresh_account_summary()
+        # ไปยิง get_portfolios ซ้ำอีกรอบ (ดูเหตุผลเต็มๆ ที่คอมเมนต์ในฟังก์ชันนั้น)
+        refresh_account_summary(portfolio_raw=raw)      # เยื้อง 8 ← ต้องอยู่ตรงนี้!
     except Exception as e:                              # เยื้อง 4
         logger.error(f"get_portfolio error: {e}")       # เยื้อง 8
         
-def refresh_account_summary():
-    """ดึงเงินสด + กำไร/ขาดทุนรวม + มูลค่าพอร์ต มาเก็บใน state (สำหรับแสดงบน dashboard)"""
+def refresh_account_summary(portfolio_raw=None):
+    """
+    ดึงเงินสด + กำไร/ขาดทุนรวม + มูลค่าพอร์ต มาเก็บใน state (สำหรับแสดงบน dashboard)
+    v2.19: เดิมฟังก์ชันนี้ยิง equity.get_portfolios ของตัวเอง ทั้งที่ refresh_positions()
+    ซึ่งเป็นคนเรียกฟังก์ชันนี้ ก็เพิ่งดึงพอร์ตก้อนเดียวกันเป๊ะๆ มาหมาดๆ ก่อนหน้านี้เอง — เป็นการ
+    ยิง request ซ้ำซ้อนโดยไม่จำเป็นทุกๆ 30 วิ ถ้ามี portfolio_raw ส่งมาให้ (จาก refresh_positions)
+    จะใช้อันนั้นแทนเลย ไม่ยิงซ้ำ ช่วยลดโอกาสโดน rate-limit/WAF บล็อกที่เคยเจอมาก่อน (ดู
+    TokenBucket ด้านบนของไฟล์) ยังคง fallback ไปดึงเองได้เหมือนเดิม เผื่อถูกเรียกจากที่อื่น
+    ที่ไม่มี raw ส่งมาให้ (ไม่มีจุดเรียกแบบนั้นในโค้ดตอนนี้ แต่กันไว้เผื่ออนาคต)
+    """
     try:
         if equity is None:
             return
@@ -522,7 +542,10 @@ def refresh_account_summary():
         if isinstance(acct, dict):
             d = acct.get("data", acct)
             cash = d.get("cashBalance") or d.get("cash") or 0.0
-        port = api_call_with_retry(query_bucket, equity.get_portfolios)
+        if portfolio_raw is not None:
+            port = portfolio_raw
+        else:
+            port = api_call_with_retry(query_bucket, equity.get_portfolios)
         pnl = 0.0
         mv = 0.0
         if isinstance(port, dict):
@@ -1189,7 +1212,11 @@ def _check_symbol_and_maybe_buy(symbol, tick_ts=None):
         s = state["symbols"].get(symbol)
         if not s:
             return
-        if s.get("buying") or s.get("bought_today"):
+        # v2.19 แก้บั๊ก: เดิมเช็คแค่ buying/bought_today ไม่ได้เช็ค "selling" — ถ้าหุ้นตัวนี้
+        # เพิ่งโดน stop-loss ขายทิ้งไป (chase-sell กำลังทำงานอยู่ held จะเหลือ 0 ระหว่างทาง
+        # ก่อน worker จบงานจริง) แล้วเงื่อนไขซื้อดันทริกเกอร์พอดีในช่วงนั้น บอทจะซื้อกลับเข้าไป
+        # ทันทีทั้งที่ยังขายไม่เสร็จ (มีโอกาสส่งคำสั่งซื้อ-ขายชนกันได้) → เพิ่มเช็ค selling ด้วย
+        if s.get("buying") or s.get("bought_today") or s.get("selling"):
             return
         if s.get("buy_attempts", 0) >= BUY_MAX_ATTEMPTS_PER_DAY:
             return
@@ -1219,9 +1246,23 @@ def _check_symbol_and_maybe_buy(symbol, tick_ts=None):
 
         if triggered:
             # เช็คเงินสดพอไหมก่อนยิงคำสั่งจริง (กันคำสั่ง reject เพราะเงินไม่พอ)
+            # v2.19 แก้บั๊ก "fail open": เดิมเช็คแค่ "cash > 0 and est_cost > cash" — ถ้า
+            # cash ยังเป็น 0 เพราะ refresh_account_summary() ยังไม่เคยดึงสำเร็จเลย (ไม่ใช่
+            # เพราะบัญชีมีเงิน 0 จริง) เงื่อนไขนี้จะเป็นเท็จทันที แล้วปล่อยให้ซื้อผ่านไปเลย
+            # ทั้งที่ไม่รู้เลยว่าเงินพอไหม → ตอนนี้เช็คจาก acct_updated (มีค่า timestamp
+            # ก็ต่อเมื่อเคยดึงสำเร็จแล้วเท่านั้น) แทน ถ้ายังไม่เคยดึงสำเร็จ ให้บล็อกไว้ก่อน
+            # เป็นค่าเริ่มต้น (fail closed) ไม่ใช่ปล่อยผ่าน
             est_cost = offer1_price * buy_volume
             cash = float(state.get("cash", 0) or 0)
-            if cash > 0 and est_cost > cash:
+            acct_updated = state.get("acct_updated", 0)
+            if not acct_updated:
+                msg = (f"⚠️ {symbol} เจอสัญญาณซื้อ แต่ยังไม่เคยดึงยอดเงินสดสำเร็จเลย "
+                       f"(ไม่รู้ว่าเงินพอไหม) → ข้ามไปก่อนเพื่อความปลอดภัย")
+                logger.warning(msg)
+                s["last_action"] = msg
+                s["prev_offer1_vol"] = offer1_vol
+                s["prev_offer1_price"] = offer1_price
+            elif est_cost > cash:
                 msg = (f"⚠️ {symbol} เจอสัญญาณซื้อ แต่เงินสดไม่พอ "
                        f"(ต้องการ ~{est_cost:,.0f} มี {cash:,.0f}) → ข้าม")
                 logger.warning(msg)
